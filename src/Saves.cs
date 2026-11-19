@@ -24,10 +24,10 @@ namespace HallowVault
         static readonly Dictionary<string, string[]> Known = new Dictionary<string, string[]> {
             { "overwatch", new[] { @"{docs}\Overwatch\Settings" } },
             { "diabloiv", new[] { @"{docs}\Diablo IV" } },
-            
             { "minecraft", new[] { @"{roaming}\.minecraft\saves", @"{roaming}\.minecraft\options.txt" } },
             { "valorant", new[] { @"{local}\VALORANT\Saved\Config" } },
-            
+            // v1.1: Delta Force keeps its settings and saves inside the game folder (Unreal, but not under LocalAppData)
+            { "deltaforce", new[] { @"{install}\Game\DeltaForce\Saved\Config", @"{install}\Game\DeltaForce\Saved\SaveGames" } },
         };
         // never copied: caches, logs, crash dumps, and anything secret
         static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Logs", "Crashes", "webcache", "webcache_4430", "ShaderCache", "Cache", "cache", "D3DCache", "GPUCache", "Telemetry", "Demos", "CrashReportClient" };
@@ -101,7 +101,13 @@ namespace HallowVault
             }
             // a few well-known places named after the game
             var norm = Library.Norm(g.Name);
-            string[] known; if (Known.TryGetValue(norm, out known)) foreach (var k in known) add(Expand(k), "Known");
+            string[] known;
+            if (Known.TryGetValue(norm, out known))
+                foreach (var k in known)
+                {
+                    if (k.Contains("{install}")) { foreach (var dir in dirs) add(Expand(k.Replace("{install}", dir.TrimEnd('\\'))), "Known"); }
+                    else add(Expand(k), "Known");
+                }
             foreach (var root in new[] { System.IO.Path.Combine(Docs, "My Games"), System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Saved Games") })
             {
                 if (!Directory.Exists(root)) continue;

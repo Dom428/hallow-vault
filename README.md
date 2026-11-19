@@ -7,6 +7,7 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - **Restore any version** - your current saves are backed up first.
 - Backups are plain **.zip** files, on a second drive by default (or any folder / network share you pick).
 - Leaves out logs, caches, crash dumps and secrets.
+- **Hallow family link:** Hallow Hub and Hallow Remote see your backups and can start one. Named pipe `HallowFamily.Vault.<user>` (`ping`, `status`, `backup <game>`, `backup all`, `restore <game>` opens the restore window; current user only), `HallowVault.exe --cmd "backup all"` for scripts and Stream Deck, and `%APPDATA%\HallowVault\status.json`.
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.
 

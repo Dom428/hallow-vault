@@ -1,4 +1,4 @@
-// Hallow Vault - backs up your game saves and settings (and the Hallow apps' own settings) as zip files,
+﻿// Hallow Vault - backs up your game saves and settings (and the Hallow apps' own settings) as zip files,
 // when a game closes and once a day, and puts any version back. WPF built in code (C# 5 / .NET Framework 4.8).
 using System;
 using System.Collections.Generic;
@@ -23,17 +23,20 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.0";
+        public const string Version = "1.1";
         [STAThread]
         public static void Main(string[] args)
         {
+            // Hallow family link: send one command to the running copy and print the reply (never opens a window)
+            int ci = Array.IndexOf(args, "--cmd");
+            if (ci >= 0) { Environment.Exit(Link.Command(string.Join(" ", args.Skip(ci + 1)))); return; }
             int si = Array.IndexOf(args, "--snap");
             if (si >= 0 && si + 1 < args.Length)
             {
@@ -115,8 +118,73 @@ namespace HallowVault
             hourly.Tick += (s, e) => CheckDaily();
             hourly.Start();
             Dispatcher.BeginInvoke(new Action(CheckDaily), DispatcherPriority.ApplicationIdle);
+            Link.Serve(LinkCommand);
+            // What's new after an update (1.0 didn't remember the version, so someone with backups already is coming from 1.0)
+            if (string.IsNullOrEmpty(S.LastSeenVersion)) S.LastSeenVersion = S.LastSig.Count > 0 ? "1.0" : Program.Version;
+            S.Save();
+            IsVisibleChanged += (s, e) => { if (IsVisible) Dispatcher.BeginInvoke(new Action(ShowWhatsNew), DispatcherPriority.ApplicationIdle); };
             if (!startHidden) Show();
         }
+
+        void ShowWhatsNew()
+        {
+            if (S.LastSeenVersion == Program.Version || !IsVisible || Snap.On) return;
+            var items = WhatsNew.Since(S.LastSeenVersion);
+            S.LastSeenVersion = Program.Version; S.Save();
+            if (items.Count > 0) new WhatsNewWindow(items) { Owner = this }.Show();
+        }
+
+        // ================================================================ Hallow family link
+        // one command line from another Hallow app -> one reply line ("ok", "ok <json>" or "error <message>")
+        string LinkCommand(string line)
+        {
+            var sp = line.IndexOf(' ');
+            var cmd = (sp < 0 ? line : line.Substring(0, sp)).ToLowerInvariant(); var arg = sp < 0 ? "" : line.Substring(sp + 1).Trim();
+            if (cmd == "ping") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version } });
+            if (cmd != "status" && cmd != "backup" && cmd != "restore") return "error unknown command";
+            var r = Dispatcher.Invoke(new Func<string>(() => LinkOnUi(cmd, arg)), TimeSpan.FromSeconds(5));
+            return r as string ?? "error Hallow Vault is busy, try again";
+        }
+        string LinkOnUi(string cmd, string arg)
+        {
+            if (cmd == "status") return "ok " + Link.Json(StatusData());
+            if (arg.Length == 0) return "error which game? (a game name, or all)";
+            if (cmd == "backup" && arg.Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                var list = Backable().ToList(); foreach (var g in list) Enqueue(g, "asked by another Hallow app");
+                return "ok";
+            }
+            var game = FindGame(arg);
+            if (game == null) return "error Hallow Vault doesn't know a game called " + arg;
+            if (roots[game.Id].Count == 0) return "error no save folder found for " + game.Name;
+            if (cmd == "restore") { var gr = game; Dispatcher.BeginInvoke(new Action(() => { ShowFromTray(); RestoreWindow(gr); })); return "ok"; }
+            if (S.Off.Contains(game.Id)) return "error " + game.Name + " is turned off in Hallow Vault";
+            Enqueue(game, "asked by another Hallow app", true);
+            return "ok";
+        }
+        // by name (case and punctuation don't matter), or by install folder
+        Game FindGame(string arg)
+        {
+            var a = arg.Trim().Trim('"'); var n = Library.Norm(a); var dir = a.TrimEnd('\\');
+            Func<Game, bool> byDir = g => !string.IsNullOrEmpty(g.InstallDir) && string.Equals(g.InstallDir.TrimEnd('\\'), dir, StringComparison.OrdinalIgnoreCase);
+            return games.FirstOrDefault(g => string.Equals(g.Name, a, StringComparison.OrdinalIgnoreCase))
+                ?? games.FirstOrDefault(g => n.Length > 0 && Library.Norm(g.Name) == n)
+                ?? games.FirstOrDefault(g => byDir(g) || g.Alts.Any(byDir));
+        }
+        // the same JSON as status.json
+        Dictionary<string, object> StatusData()
+        {
+            var gl = new List<object>();
+            foreach (var g in games.Where(x => roots.ContainsKey(x.Id) && roots[x.Id].Count > 0).OrderBy(x => x.Source == "hallow").ThenBy(x => x.Name))
+            {
+                List<BackupInfo> hs; if (!history.TryGetValue(g.Id, out hs)) hs = new List<BackupInfo>();
+                gl.Add(new Dictionary<string, object> { { "name", g.Name }, { "installDir", string.IsNullOrEmpty(g.InstallDir) ? null : g.InstallDir },
+                    { "lastBackup", Link.Time(hs.Count == 0 ? (DateTime?)null : hs[0].When) }, { "versions", hs.Count }, { "sizeBytes", hs.Sum(x => x.Bytes) }, { "off", S.Off.Contains(g.Id) } });
+            }
+            bool isBusy; lock (busy) isBusy = working;
+            return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "games", gl } };
+        }
+        void WriteStatus() { if (!Snap.On) Link.WriteStatus(StatusData()); }
 
         static ImageSource AppIcon()
         {
@@ -247,6 +315,7 @@ namespace HallowVault
             var last = all.Count == 0 ? (DateTime?)null : all.Max(x => x.When);
             summary.Text = "Backing up " + Backable().Count() + " games to " + Root + "   ·   " + all.Count + " backups, " + VaultSettings.Size(all.Sum(x => x.Bytes)) + "   ·   last one " + VaultSettings.Ago(last) +
                 (S.OnClose ? "   ·   automatic when a game closes" : "") + (S.Daily ? " and daily" : "");
+            WriteStatus();
         }
         FrameworkElement Label(string t)
         {
@@ -325,7 +394,7 @@ namespace HallowVault
         void Enqueue(Game g, string reason, bool force = false)
         {
             lock (busy) { if (queue.Any(q => q.Item1.Id == g.Id)) return; queue.Enqueue(Tuple.Create(g, force ? "!" + reason : reason)); if (working) return; working = true; }
-            allBtn.IsEnabled = false;
+            allBtn.IsEnabled = false; WriteStatus();
             var root = Root; var keep = S.Keep;
             new Thread(() =>
             {
@@ -351,7 +420,7 @@ namespace HallowVault
                     var m = msg; var gg = g2;
                     Dispatcher.BeginInvoke(new Action(() => { history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, S.Extra.ContainsKey(gg.Id) ? S.Extra[gg.Id] : null); Fill(); if (m != null) Status(m); }));
                 }
-                Dispatcher.BeginInvoke(new Action(() => { allBtn.IsEnabled = true; }));
+                Dispatcher.BeginInvoke(new Action(() => { allBtn.IsEnabled = true; WriteStatus(); }));
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
             Status("Backing up " + g.Name + "...");
         }
@@ -429,7 +498,7 @@ namespace HallowVault
             tray.MouseClick += (s, e) => { if (e.Button == WF.MouseButtons.Left) ShowFromTray(); };
         }
         public void ShowFromTray() { Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate(); Topmost = true; Topmost = false; }
-        void Quit() { exiting = true; S.Save(); if (tray != null) { tray.Visible = false; tray.Dispose(); } Application.Current.Shutdown(); }
+        void Quit() { exiting = true; S.Save(); WriteStatus(); if (tray != null) { tray.Visible = false; tray.Dispose(); } Application.Current.Shutdown(); }
 
         public void SnapAll(string dir)
         {

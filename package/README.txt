@@ -6,6 +6,11 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.1
+- Delta Force's settings and saves are found and backed up now.
+- Hallow Hub and Hallow Remote can see your backups and start one (Hallow family link).
+  For scripts and Stream Deck: HallowVault.exe --cmd "backup all" (or "backup Deadlock").
+
 WHAT IT DOES
 - Finds where your games keep saves and settings: Steam's own folders, Unity and Unreal
   games' save folders, and a few well-known places. Add any other folder yourself.

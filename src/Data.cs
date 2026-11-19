@@ -1,4 +1,4 @@
-// Hallow Vault - settings (%APPDATA%\HallowVault\vault.json) and the Game type shared with Hallow Hub's library scanner.
+﻿// Hallow Vault - settings (%APPDATA%\HallowVault\vault.json) and the Game type shared with Hallow Hub's library scanner.
 using System;
 using System.Collections.Generic;
 using System.IO;
