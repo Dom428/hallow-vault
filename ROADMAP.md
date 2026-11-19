@@ -15,5 +15,42 @@
 
 ## Next
 
+### 1.8 - Updates and better save detection
+- Updates itself from GitHub (asks first, checks the download's SHA-256)
+- Finds more saves without a manifest: Documents\<game>, and AppData / LocalAppData / LocalLow folders named after the game's developer (from the game's own files)
+- Registry saves (HKCU\Software\<developer>\<game>, like Unity games' settings): exported to a .reg in the backup and put back - only into that game's own key, after a safety backup
+
+### 1.9 - Schedules, filters and a log
+- Back up every N hours, on top of game-closed and daily
+- Compression level (smaller or faster)
+- Include / leave out patterns per game
+- Backup log: what was backed up, skipped, refused or failed, and when
+
+### 1.10 - Second copy you can trust
+- The second copy shows when it's behind (drive missing, copies not made yet) and catches up by itself
+- Notices cloud sync conflict copies (OneDrive / Dropbox / Google Drive) in the second copy
+
+### Gaps vs Ludusavi
+Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = can be built and tested on this PC without the user.
+- **Game coverage (the big one):** Ludusavi knows save locations for ~19,000 games from its manifest, built from PCGamingWiki. **Needs the user** - Vault would have to download the manifest (see the notes below); 1.8 narrows the gap with better guessing.
+- **Registry saves:** buildable here - 1.8.
+- **Scheduled backups:** buildable here - 1.9 (Ludusavi leaves scheduling to Task Scheduler; GameSave Manager makes scheduled tasks).
+- **Compression choice:** buildable here - 1.9 (zip level; Ludusavi also offers other zip methods, which Windows' built-in zip can't make).
+- **Filters / exclusions per game:** buildable here - 1.9.
+- **Cloud upload (rclone, many providers):** not buildable here - needs accounts and a downloaded tool; Vault's second copy into a synced folder covers OneDrive / Google Drive / Dropbox. 1.10 makes it trustworthy (behind / conflicts).
+- **Differential backups (full + changes):** buildable, later - Vault's per-version zips are simpler to restore and saves are small.
+- **Backup validation (check every zip opens and matches):** buildable, later.
+- **Redirects (restore to a different folder or drive):** partly done - 1.7's import re-maps folders between PCs.
+- **Custom games / your own entries:** done - Add folder on any game; adding games that no launcher knows is buildable, later.
+- **Launch wrapping (back up after a game run from a launcher):** not needed - Vault watches running games itself.
+- **Steam screenshots, Proton / Wine, Steam Deck, Heroic / Lutris:** not buildable here - Windows-only app, no Linux PC to test on.
+- **CLI with JSON output:** partly done - `--cmd status` gives JSON through the running app.
+- **GameSave Manager's sync links (move saves into Dropbox with a link):** not planned - moving live save folders is risky; the second copy does the same job safely.
+
+#### Ludusavi manifest notes (to ask the user before anything is downloaded)
+- Where: `github.com/mtkennerly/ludusavi-manifest`, branch `data`, file `data/manifest.yaml` - about **17.8 MB** of YAML (GitHub API size 17,803,965 bytes), ~19,000 games.
+- Format: top-level keys are game names; each has `files` (path templates with `<base>`, `<root>`, `<game>`, `<home>`, `<winAppData>`, `<winLocalAppData>`, `<winDocuments>`, `<storeUserId>` ... and `tags: [save, config]`, `when: [{os, store}]`), `registry` (keys with tags), `installDir`, `steam: {id}`. Schema in `data/schema.yaml`.
+- License: the repo is **MIT** (code and compiled manifest). The data comes from **PCGamingWiki**, whose content is listed as **CC BY-NC-SA 3.0** (non-commercial, share-alike, attribution) - fine for a free personal app with credit; I couldn't open PCGamingWiki's own copyright page (HTTP 403), so that comes from Wikipedia's listing.
+- How Vault could use it: on the user's OK, download it once (and check for a newer one weekly, with its SHA from GitHub), parse the YAML into a cached index by Steam id and name (the Windows paths only), and use it as one more source in Find. Needs a small YAML reader (no YAML library in .NET Framework).
 ### Later
 - Fixes from real use: check the game-closed backup after real game sessions
