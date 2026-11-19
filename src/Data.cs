@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 
@@ -18,6 +19,8 @@ namespace HallowVault
         [DataMember] public string Launch;
         [DataMember] public string Args = "";
         public string Cover, Hero, Logo, Header, IconExe; public string OriginalName;
+        public string Folder;   // v1.12: a game you added keeps its backup folder name when you rename it
+        public string Exe;      // v1.12: a game you added: its .exe (running = that exact file)
         public DateTime UpdatedAt;
         public long SizeBytes; public string Drive; public string Uninstall;
         public bool NeedsUpdate, Updating; public double Progress = -1;
@@ -25,6 +28,46 @@ namespace HallowVault
         public List<Game> Alts = new List<Game>();
         public Game Parent;
         public string SourceName { get { return Source == "steam" ? "Steam" : Source == "battlenet" ? "Battle.net" : Source == "epic" ? "Epic Games" : Source == "ea" ? "EA app" : Source == "ubisoft" ? "Ubisoft Connect" : Source == "gog" ? "GOG" : Source == "riot" ? "Riot" : Source == "xbox" ? "Xbox" : Source == "hallow" ? "Hallow apps" : "Added by you"; } }
+    }
+
+    // v1.12: a game no launcher knows - its name, save folders and (optionally) its .exe, kept in vault.json
+    [DataContract]
+    public class CustomGame
+    {
+        [DataMember] public string Id, Name, Folder, Exe;
+        [DataMember] public List<string> Folders = new List<string>();
+        [OnDeserializing] void D(StreamingContext c) { Folders = new List<string>(); }
+        public Game ToGame() { return new Game { Id = Id, Name = Name, Source = "custom", Folder = Folder, Exe = string.IsNullOrEmpty(Exe) ? null : Exe }; }
+
+        // checks and stores a new or edited game; returns null when saved, or what's wrong. `taken`: the names of every other game Vault shows.
+        public static string Save(VaultSettings s, CustomGame existing, string name, IEnumerable<string> folders, string exe, IEnumerable<string> taken, out CustomGame saved)
+        {
+            saved = null; name = (name ?? "").Trim(); exe = (exe ?? "").Trim().Trim('"');
+            var fl = (folders ?? new string[0]).Select(f => (f ?? "").Trim().Trim('"')).Select(f => f.Length > 3 ? f.TrimEnd('\\') : f).Where(f => f.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (name.Length == 0) return "Give the game a name.";
+            if (name.Length > 100) return "That name is too long.";
+            var n = Library.Norm(name);
+            if (n.Length == 0) return "Give the game a name with letters or numbers in it.";
+            if (taken != null && taken.Any(t => Library.Norm(t) == n)) return "Vault already has a game called " + name + ".";
+            if (s.Custom.Any(c => c != existing && Library.Norm(c.Name) == n)) return "You already added a game called " + name + ".";
+            if (fl.Count == 0) return "Add at least one save folder.";
+            foreach (var f in fl)
+            {
+                if (f.IndexOfAny(Path.GetInvalidPathChars()) >= 0 || !Path.IsPathRooted(f) || !(f.StartsWith("\\\\") || (f.Length >= 3 && f[1] == ':' && f[2] == '\\'))) return f + " isn't a full folder path.";
+                if (Path.GetPathRoot(f).TrimEnd('\\').Equals(f.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return "Pick a save folder, not a whole drive (" + f + ").";
+            }
+            if (exe.Length > 0 && (exe.IndexOfAny(Path.GetInvalidPathChars()) >= 0 || !Path.IsPathRooted(exe) || !exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))) return "The game's program has to be an .exe file.";
+            var c2 = existing ?? new CustomGame { Id = "vaultgame:" + DateTime.UtcNow.Ticks.ToString("x"), Folder = Backups.SafeName(name) };
+            c2.Name = name; c2.Folders = fl; c2.Exe = exe.Length == 0 ? null : exe;
+            if (existing == null) s.Custom.Add(c2);
+            s.LastSig.Remove(c2.Id);   // back up with the new folders next time
+            saved = c2; return null;
+        }
+        // forgets the game (its settings only); its backups stay in the vault
+        public static void Remove(VaultSettings s, CustomGame c)
+        {
+            s.Custom.Remove(c); s.Off.Remove(c.Id); s.LastSig.Remove(c.Id); s.Alarms.Remove(c.Id); s.Extra.Remove(c.Id); s.Include.Remove(c.Id); s.Exclude.Remove(c.Id);
+        }
     }
 
     [DataContract]
@@ -52,10 +95,15 @@ namespace HallowVault
         [DataMember] public List<string> Off = new List<string>();      // games you don't want backed up
         [DataMember] public Dictionary<string, string> LastSig = new Dictionary<string, string>();   // fingerprint of the last backup, per game
         [DataMember] public string LastSeenVersion = "", LastUpdateCheck = "";
+        [DataMember] public List<CustomGame> Custom = new List<CustomGame>();   // v1.12: games no launcher knows, added by you
+        [DataMember] public bool WeeklyCheck = false;                   // v1.12: check every backup once a week (off by default)
+        [DataMember] public string LastCheck = "";
+        [DataMember] public Dictionary<string, string> Checks = new Dictionary<string, string>();   // v1.12: backup folder name -> "<level>|<when>|<summary>" of the last check
         [OnDeserializing] void D(StreamingContext c)
         {
             VaultDir = ""; Keep = 10; OnClose = true; Daily = true; LastDaily = ""; TrayOnClose = true; Extra = new Dictionary<string, List<string>>(); Off = new List<string>();
             LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0; UseHallowIcon = true; UseHallowAccent = true; LastCrashShown = ""; Alarms = new Dictionary<string, string>(); UseManifest = true; ManifestConfig = true; EveryHours = 0; LastScheduled = ""; Compression = "best"; Include = new Dictionary<string, List<string>>(); Exclude = new Dictionary<string, List<string>>();
+            Custom = new List<CustomGame>(); WeeklyCheck = false; LastCheck = ""; Checks = new Dictionary<string, string>();
         }
 
         public static string Dir { get { return Link.TestDir != null ? Path.Combine(Link.TestDir, "HallowVault") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HallowVault"); } }

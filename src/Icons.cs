@@ -21,6 +21,7 @@ namespace HallowVault
             { "Back up everything", "floppy-disk" }, { "Back up", "floppy-disk" }, { "Restore", "clock-rotate-left" }, { "Restore this", "clock-rotate-left" },
             { "Open folder", "folder-open" }, { "Open the vault", "folder-open" }, { "Add folder", "plus" }, { "Turn off", "power-off" }, { "Turn on", "power-off" },
             { "Refresh", "arrows-rotate" }, { "Settings", "gear" }, { "Change...", "pen" }, { "Cancel", "xmark" }, { "x", "xmark" }, { "OK", "check" }, { "Compare", "magnifying-glass" }, { "Pick...", "folder-open" }, { "Show details", "note-sticky" }, { "Pin", "thumbtack" }, { "Unpin", "thumbtack" }, { "Export...", "box-open" }, { "Import...", "download" }, { "Restore all newest", "clock-rotate-left" }, { "Check for updates", "arrows-rotate" }, { "Update", "download" }, { "Backup log", "list" }, { "Save", "check" }, { "Close", "xmark" }, { "Got it", "check" },
+            { "Add a game", "plus" }, { "Check backups", "heart-pulse" }, { "Check all now", "heart-pulse" }, { "Check again", "heart-pulse" }, { "Edit game", "pen" }, { "Remove game", "trash-can" }, { "Add folder...", "plus" }, { "Remove", "minus" }, { "Pick .exe...", "folder-open" }, { "Clear", "xmark" },
         };
         static readonly string[][] Prefixes = { new[] { "Update to", "download" } };
         public static string ForLabel(string label)

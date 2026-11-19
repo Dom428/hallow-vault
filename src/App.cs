@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.11.0.0")]
-[assembly: AssemblyFileVersion("1.11.0.0")]
+[assembly: AssemblyVersion("1.12.0.0")]
+[assembly: AssemblyFileVersion("1.12.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.11";
+        public const string Version = "1.12";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -134,6 +134,8 @@ namespace HallowVault
             sched.Tick += (s, e) => CheckSchedule();
             sched.Start();
             hourly.Tick += (s, e) => CheckManifest(false);   // v1.11: weekly re-check (asked every half hour, acts once a week)
+            hourly.Tick += (s, e) => CheckWeekly();   // v1.12: the weekly backup check (off by default)
+            var firstCheck = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) }; firstCheck.Tick += (s, e) => { firstCheck.Stop(); CheckWeekly(); }; firstCheck.Start();
             Dispatcher.BeginInvoke(new Action(() => CheckManifest(false)), DispatcherPriority.ApplicationIdle);
             copyWatch = new DispatcherTimer { Interval = TimeSpan.FromMinutes(10) }; copyWatch.Tick += (s, e) => CheckCopy(); copyWatch.Start();   // v1.10
             Dispatcher.BeginInvoke(new Action(CheckCopy), DispatcherPriority.ApplicationIdle);
@@ -216,6 +218,250 @@ namespace HallowVault
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
         }
 
+        // ================================================================ v1.12: check backups (read-only) and games you add
+        bool checking; string checkProgress; List<FolderCheck> checkResults; string checkScope;   // checkScope: null = the whole vault, else one game folder
+        readonly Dictionary<string, ZipCheck> zipChecks = new Dictionary<string, ZipCheck>(StringComparer.OrdinalIgnoreCase);
+        Window checkWin; StackPanel checkBody; TextBlock checkState; Button checkBtn;
+        Dictionary<string, string> FolderNames(string root)
+        {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var x in games) { var f = System.IO.Path.GetFileName(Backups.GameDir(root, x)); if (!d.ContainsKey(f)) d[f] = x.Name; }
+            return d;
+        }
+        // g = null: every backup in the vault. quiet: no window (the weekly check, the family link). notify: tell you when something's wrong.
+        void RunCheck(Game g, bool quiet = false, bool notify = false)
+        {
+            if (checking) { if (!quiet) { ShowCheckWindow(); Status("A check is already running."); } return; }
+            checking = true; var root = Root; var names = FolderNames(root);
+            var dir = g == null ? null : Backups.GameDir(root, g); var gname = g == null ? null : g.Name;
+            checkProgress = g == null ? "Checking every backup..." : "Checking " + Poss(g.Name) + " backups...";
+            if (!quiet && !Snap.On) ShowCheckWindow();
+            Status(checkProgress); ShowCheckState(); RefreshCheckWindow();
+            new Thread(() =>
+            {
+                List<FolderCheck> res; string err = null;
+                try
+                {
+                    res = g == null ? Checker.All(root, names, (i, n) => Dispatcher.BeginInvoke(new Action(() => { checkProgress = "Checking " + (i + 1) + " of " + n + (n == 1 ? " game..." : " games..."); ShowCheckState(); RefreshCheckWindow(); })))
+                        : new List<FolderCheck> { Checker.Folder(dir, gname) };
+                }
+                catch (Exception ex) { res = new List<FolderCheck>(); err = ex.Message; }
+                Dispatcher.BeginInvoke(new Action(() => CheckDone(g, dir, res, err, notify)));
+            }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
+        }
+        void ApplyCheck(string dir, List<FolderCheck> res)
+        {
+            foreach (var f in res) { if (f.Zips.Count > 0 || dir != null) S.Checks[f.Folder] = Checker.Pack(f); foreach (var z in f.Zips) zipChecks[z.File] = z; }
+            if (dir == null)
+            {
+                foreach (var k in S.Checks.Keys.ToList()) if (!res.Any(f => f.Folder.Equals(k, StringComparison.OrdinalIgnoreCase))) S.Checks.Remove(k);   // folders with no backups left
+                S.LastCheck = DateTime.Now.ToString("o");
+            }
+            checkResults = res; checkScope = dir;
+        }
+        void CheckDone(Game g, string dir, List<FolderCheck> res, string err, bool notify)
+        {
+            checking = false;
+            if (err != null) { Status("Couldn't check the backups: " + err); Log.Add(g == null ? "Backup check" : g.Name, "check failed: " + err); ShowCheckState(); RefreshCheckWindow(); return; }
+            ApplyCheck(dir, res); S.Save();
+            var msg = CheckMessage(res, g);
+            Log.Add(g == null ? "Backup check" : g.Name, "checked: " + msg);
+            Status(msg);
+            if (notify && res.Any(f => f.Level > 0)) Notify("Hallow Vault - backup check", msg + (hosted ? " (Hallow Vault > Check backups)" : ""));
+            Fill(); ShowCheckState(); RefreshCheckWindow();
+        }
+        static string CheckMessage(List<FolderCheck> res, Game g)
+        {
+            var zips = res.SelectMany(f => f.Zips).Where(z => z.Level >= 0).ToList();
+            int red = zips.Count(z => z.Level == 2), amber = zips.Count(z => z.Level == 1), extra = res.Count(f => f.Notes.Any(n => n.Contains("unfinished")));
+            var who = g == null ? res.Count + (res.Count == 1 ? " game, " : " games, ") : Poss(g.Name) + " ";
+            if (zips.Count == 0) return g == null ? "No backups to check yet." : g.Name + " has no backups to check yet.";
+            var s = "Checked " + who + zips.Count + (zips.Count == 1 ? " backup" : " backups") + ": ";
+            if (red == 0 && amber == 0) s += zips.Count == 1 ? "it's fine." : "all fine.";
+            else s += (red > 0 ? red + " damaged" : "") + (red > 0 && amber > 0 ? ", " : "") + (amber > 0 ? amber + " worth a look" : "") + ", " + (zips.Count - red - amber) + " fine.";
+            if (extra > 0) s += " Unfinished backup files in " + extra + (extra == 1 ? " folder." : " folders.");
+            return s + " Nothing was changed.";
+        }
+        void CheckWeekly()
+        {
+            if (!S.WeeklyCheck || checking || Snap.On) return;
+            DateTime last; if (DateTime.TryParse(S.LastCheck, out last) && (DateTime.Now - last).TotalDays < 7) return;
+            RunCheck(null, true, true);
+        }
+        // the coloured dot next to a game (its last check)
+        FrameworkElement CheckDot(string gameDir)
+        {
+            string packed; if (!S.Checks.TryGetValue(System.IO.Path.GetFileName(gameDir), out packed)) return null;
+            int level; DateTime when; string sum; if (!Checker.Unpack(packed, out level, out when, out sum)) return null;
+            level = Math.Max(0, Math.Min(2, level));
+            var e = new System.Windows.Shapes.Ellipse { Width = 9, Height = 9, Fill = B(Checker.Colors[level]), Margin = new Thickness(9, 2, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var host = new Border { Background = Brushes.Transparent, ToolTip = "Backup check " + VaultSettings.Ago(when) + ": " + sum + (level > 0 ? " (Check backups for details)" : "") };
+            if (level == 0) host.Child = e;
+            else host.Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { e, new TextBlock { Text = Checker.Words[level], FontSize = 10.5, Foreground = B(Checker.Colors[level]), Margin = new Thickness(5, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center } } };
+            return host;
+        }
+        void ShowCheckState()
+        {
+            if (checkState == null) return;
+            if (checking) { checkState.Text = checkProgress; checkState.Foreground = B("#F0BE5A"); return; }
+            DateTime last;
+            if (!DateTime.TryParse(S.LastCheck, out last)) { checkState.Text = "Not checked yet."; checkState.Foreground = (Brush)FindResource("Muted"); return; }
+            int red = 0, amber = 0, n = 0;
+            foreach (var v in S.Checks.Values) { int l; DateTime w; string su; if (Checker.Unpack(v, out l, out w, out su)) { n++; if (l == 2) red++; else if (l == 1) amber++; } }
+            if (red + amber == 0) { checkState.Text = "Last check " + VaultSettings.Ago(last) + ": " + (n == 1 ? "1 game's backups fine." : "all " + n + " games' backups fine."); checkState.Foreground = B(Checker.Colors[0]); }
+            else { checkState.Text = "Last check " + VaultSettings.Ago(last) + ": " + (red > 0 ? red + (red == 1 ? " game has" : " games have") + " damaged backups" : "") + (red > 0 && amber > 0 ? ", " : "") + (amber > 0 ? amber + (amber == 1 ? " game needs" : " games need") + " a look" : "") + " - Check all now for details."; checkState.Foreground = B(Checker.Colors[red > 0 ? 2 : 1]); }
+        }
+        void ShowCheckWindow()
+        {
+            if (checkWin != null) { try { checkWin.Activate(); } catch { } return; }
+            checkWin = BuildCheck(this); checkWin.Closed += (s, e) => { checkWin = null; checkBody = null; };
+            checkWin.Show();
+        }
+        Window BuildCheck(Window owner)
+        {
+            var w = Dialog("Check backups", 700, owner);
+            var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
+            sp.Children.Add(new TextBlock { Text = "Check backups", FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+            sp.Children.Add(new TextBlock { Text = "Every zip must open, every file in it must match its checksum, and the files must match the list Vault wrote down when it made the backup. This only reads - nothing is changed or deleted.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            checkBody = new StackPanel(); sp.Children.Add(checkBody);
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+            var again = new Button { Content = "Check again", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0) };
+            again.Click += (s, e) => { var g = checkScope == null ? null : games.FirstOrDefault(x => string.Equals(Backups.GameDir(Root, x), checkScope, StringComparison.OrdinalIgnoreCase)); RunCheck(g); };
+            var close = new Button { Content = "Close", Style = (Style)FindResource("Btn"), IsCancel = true };
+            close.Click += (s, e) => w.Close();
+            row.Children.Add(again); row.Children.Add(close); sp.Children.Add(row);
+            w.Content = sp; RefreshCheckWindow(); return w;
+        }
+        void RefreshCheckWindow()
+        {
+            if (checkBody == null) return;
+            checkBody.Children.Clear();
+            if (checking) { checkBody.Children.Add(new TextBlock { Text = checkProgress, Foreground = B("#F0BE5A"), FontWeight = FontWeights.SemiBold }); return; }
+            var res = checkResults;
+            if (res == null) { checkBody.Children.Add(new TextBlock { Text = "Not checked yet.", Foreground = (Brush)FindResource("Muted") }); return; }
+            var head = new TextBlock { Text = CheckMessage(res, checkScope == null ? null : new Game { Name = res.Count > 0 ? res[0].Name : "This game" }), FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
+                Foreground = B(Checker.Colors[res.Count == 0 ? 0 : Math.Max(0, res.Max(f => f.Level))]) };
+            checkBody.Children.Add(head);
+            var lst = new StackPanel();
+            foreach (var f in res.OrderByDescending(x => x.Level).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                var lv = Math.Max(0, f.Level);
+                var d = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+                var dot = new System.Windows.Shapes.Ellipse { Width = 10, Height = 10, Fill = B(Checker.Colors[lv]), Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+                DockPanel.SetDock(dot, Dock.Left); d.Children.Add(dot);
+                var nm = new TextBlock { Text = f.Name, FontWeight = FontWeights.SemiBold, Width = 210, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = f.Dir }; DockPanel.SetDock(nm, Dock.Left); d.Children.Add(nm);
+                d.Children.Add(new TextBlock { Text = f.Summary, TextWrapping = TextWrapping.Wrap, Foreground = lv == 0 ? (Brush)FindResource("Muted") : B(Checker.Colors[lv]) });
+                lst.Children.Add(d);
+                foreach (var z in f.Zips.Where(x => x.Level > 0))
+                {
+                    var zd = new DockPanel { Margin = new Thickness(20, 0, 0, 4) };
+                    var zz = z; var show = new Button { Content = "Open folder", Tag = "icon", Width = 28, Height = 26, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Show this backup in its folder" };
+                    show.Click += (s, e) => { try { Process.Start("explorer.exe", "/select,\"" + zz.File + "\""); } catch { } };
+                    DockPanel.SetDock(show, Dock.Right); zd.Children.Add(show);
+                    var bi = System.IO.Path.GetFileNameWithoutExtension(z.File); DateTime made;
+                    var label = DateTime.TryParseExact(bi, "yyyy-MM-dd HH.mm.ss", null, System.Globalization.DateTimeStyles.None, out made) ? made.ToString("d MMM yyyy, HH:mm") : System.IO.Path.GetFileName(z.File);
+                    zd.Children.Add(new TextBlock { Text = label + " - " + Checker.Words[z.Level] + ": " + z.Note, TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = B(Checker.Colors[z.Level]) });
+                    lst.Children.Add(zd);
+                }
+            }
+            if (res.Count == 0) lst.Children.Add(new TextBlock { Text = "No backups in " + Root + " yet.", Foreground = (Brush)FindResource("Muted") });
+            checkBody.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 400, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            if (res.Any(f => f.Level == 2))
+                checkBody.Children.Add(new TextBlock { Text = "A damaged backup can't be put back in full. Vault keeps it anyway (nothing is deleted) and your other versions aren't affected - press Back up on that game for a fresh copy, and pin a good version if you want it kept.", Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
+        }
+
+        // add or edit a game no launcher knows (c = null: a new one)
+        Window BuildCustom(CustomGame c, Window owner)
+        {
+            var w = Dialog(c == null ? "Add a game" : "Edit " + c.Name, 580, owner);
+            var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
+            sp.Children.Add(new TextBlock { Text = c == null ? "Add a game" : "Edit " + c.Name, FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4), TextWrapping = TextWrapping.Wrap });
+            sp.Children.Add(new TextBlock { Text = "For a game no launcher knows - a DRM-free copy, an emulator, an old game. Vault backs up its save folders like any other game: daily, when you press Back up, and when it closes if you pick its program.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            sp.Children.Add(new TextBlock { Text = "Name", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 4) });
+            var nameBox = new TextBox { Style = (Style)FindResource("Field"), Text = c == null ? "" : c.Name }; sp.Children.Add(nameBox);
+            sp.Children.Add(new TextBlock { Text = "Save folders", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 12, 0, 4) });
+            var folders = c == null ? new List<string>() : c.Folders.ToList();
+            var fl = new StackPanel(); sp.Children.Add(fl);
+            Action redraw = null;
+            redraw = () =>
+            {
+                fl.Children.Clear();
+                if (folders.Count == 0) fl.Children.Add(new TextBlock { Text = "None yet - add the folder where the game keeps its saves.", Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(0, 0, 0, 4) });
+                foreach (var f in folders.ToList())
+                {
+                    var ff = f; var d = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+                    var rm = new Button { Content = "Remove", Tag = "icon", Width = 28, Height = 26, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Stop backing up this folder (backups already made stay)" };
+                    rm.Click += (s, e) => { folders.Remove(ff); redraw(); };
+                    DockPanel.SetDock(rm, Dock.Right); d.Children.Add(rm);
+                    var there = Directory.Exists(ff) || File.Exists(ff);
+                    d.Children.Add(new TextBlock { Text = ff + (there ? "" : "   (not found)"), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = ff, VerticalAlignment = VerticalAlignment.Center, Foreground = there ? (Brush)FindResource("Text") : B("#F0BE5A") });
+                    fl.Children.Add(d);
+                }
+            };
+            redraw();
+            var addF = new Button { Content = "Add folder...", Style = (Style)FindResource("Btn"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 0) };
+            addF.Click += (s, e) =>
+            {
+                using (var d = new WF.FolderBrowserDialog { Description = "Pick a folder where the game keeps its saves", ShowNewFolderButton = false })
+                {
+                    if (folders.Count > 0) d.SelectedPath = folders[folders.Count - 1];
+                    if (d.ShowDialog() != WF.DialogResult.OK) return;
+                    if (!folders.Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) folders.Add(d.SelectedPath);
+                    redraw();
+                }
+            };
+            sp.Children.Add(addF);
+            sp.Children.Add(new TextBlock { Text = "The game's program (optional)", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 12, 0, 4) });
+            var exe = c == null ? null : c.Exe;
+            var exeRow = new DockPanel();
+            var exeText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            var clear = new Button { Content = "Clear", Tag = "icon", Width = 28, Height = 26, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "No program" };
+            var pickExe = new Button { Content = "Pick .exe...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
+            Action showExe = () => { exeText.Text = string.IsNullOrEmpty(exe) ? "None" : exe; exeText.ToolTip = exe; exeText.Foreground = string.IsNullOrEmpty(exe) ? (Brush)FindResource("Muted") : (Brush)FindResource("Text"); clear.Visibility = string.IsNullOrEmpty(exe) ? Visibility.Collapsed : Visibility.Visible; };
+            clear.Click += (s, e) => { exe = null; showExe(); };
+            pickExe.Click += (s, e) =>
+            {
+                var d = new Microsoft.Win32.OpenFileDialog { Title = "Pick the game's .exe", Filter = "Programs (*.exe)|*.exe", CheckFileExists = true };
+                if (!string.IsNullOrEmpty(exe)) try { d.InitialDirectory = System.IO.Path.GetDirectoryName(exe); } catch { }
+                if (d.ShowDialog(w) == true) { exe = d.FileName; showExe(); }
+            };
+            showExe();
+            DockPanel.SetDock(clear, Dock.Right); exeRow.Children.Add(clear); DockPanel.SetDock(pickExe, Dock.Right); exeRow.Children.Add(pickExe); exeRow.Children.Add(exeText); sp.Children.Add(exeRow);
+            sp.Children.Add(new TextBlock { Text = "With its program, Vault notices when the game is running and backs up a few seconds after it closes - only that exact .exe counts.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
+            var err = new TextBlock { Foreground = B("#F07070"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0), Visibility = Visibility.Collapsed }; sp.Children.Add(err);
+            var row = new DockPanel { Margin = new Thickness(0, 14, 0, 0) };
+            if (c != null)
+            {
+                var remove = new Button { Content = "Remove game", Style = (Style)FindResource("Btn") };
+                remove.Click += (s, e) =>
+                {
+                    var dir = Backups.GameDir(Root, c.ToGame()); var n = Backups.ZipsIn(dir).Count;
+                    if (MessageBox.Show(w, "Remove " + c.Name + " from Hallow Vault?\n\n" + (n > 0 ? "Its " + n + (n == 1 ? " backup stays" : " backups stay") + " in " + dir + " - nothing is deleted. Add the game again with the same name to see " + (n == 1 ? "it" : "them") + " again." : "Nothing is deleted."), "Remove game", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                    var nm = c.Name; CustomGame.Remove(S, c); S.Save(); w.Close(); Rescan();
+                    Log.Add(nm, "removed from Vault (its backups were kept)");
+                    Status(nm + " removed from Vault." + (n > 0 ? " Its backups are still in " + dir + "." : ""));
+                };
+                DockPanel.SetDock(remove, Dock.Left); row.Children.Add(remove);
+            }
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var cancel = new Button { Content = "Cancel", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+            var save = new Button { Content = "Save", Style = (Style)FindResource("Accent"), MinWidth = 80, IsDefault = true };
+            save.Click += (s, e) =>
+            {
+                var taken = games.Where(x => c == null || x.Id != c.Id).Select(x => x.Name).ToList();
+                CustomGame saved; var problem = CustomGame.Save(S, c, nameBox.Text, folders, exe, taken, out saved);
+                if (problem != null) { err.Text = problem; err.Visibility = Visibility.Visible; return; }
+                S.Save(); w.Close(); Rescan();
+                var g = games.FirstOrDefault(x => x.Id == saved.Id);
+                Log.Add(saved.Name, c == null ? "added by you (" + saved.Folders.Count + (saved.Folders.Count == 1 ? " folder" : " folders") + ")" : "edited");
+                var found = g != null && roots.ContainsKey(g.Id) && roots[g.Id].Count > 0;
+                Status(saved.Name + (c == null ? " added" : " saved") + (found ? " - it's backed up like any other game." : " - no files in its save folders yet, so there's nothing to back up for now."));
+                if (c == null && found && !S.Off.Contains(g.Id)) Enqueue(g, "you added it");   // a first backup right away
+            };
+            btns.Children.Add(cancel); btns.Children.Add(save); row.Children.Add(btns); sp.Children.Add(row);
+            w.Content = sp; return w;
+        }
+
         // ================================================================ v1.9: schedule, compression, filters, log
         DispatcherTimer sched;
         void ApplyCompression() { Backups.Level = S.Compression == "fast" ? System.IO.Compression.CompressionLevel.Fastest : S.Compression == "none" ? System.IO.Compression.CompressionLevel.NoCompression : System.IO.Compression.CompressionLevel.Optimal; }
@@ -269,7 +515,7 @@ namespace HallowVault
             var count = new TextBlock { Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(0, 8, 0, 0), TextWrapping = TextWrapping.Wrap };
             sp.Children.Add(count);
             Func<TextBox, List<string>> lines = tb => tb.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).Distinct().ToList();
-            var rs0 = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null);
+            var rs0 = Saves.Find(g, steamUser, ExtraOf(g));
             Action recount = () =>
             {
                 int n = 0, all = 0; long b = 0; var i = lines(inc).ToArray(); var x = lines(exc).ToArray();
@@ -290,7 +536,7 @@ namespace HallowVault
                 if (i.Count > 0) S.Include[g.Id] = i; else S.Include.Remove(g.Id);
                 if (x.Count > 0) S.Exclude[g.Id] = x; else S.Exclude.Remove(g.Id);
                 S.LastSig.Remove(g.Id); S.Save(); w.Close();
-                roots[g.Id] = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null); Fill();
+                roots[g.Id] = Saves.Find(g, steamUser, ExtraOf(g)); Fill();
                 Status(i.Count + x.Count == 0 ? "Everything in " + g.Name + "'s save folders is backed up again." : "Saved - " + g.Name + "'s next backup follows these rules.");
             };
             row.Children.Add(cancel); row.Children.Add(save); sp.Children.Add(row);
@@ -347,7 +593,7 @@ namespace HallowVault
             var sp = line.IndexOf(' ');
             var cmd = (sp < 0 ? line : line.Substring(0, sp)).ToLowerInvariant(); var arg = sp < 0 ? "" : line.Substring(sp + 1).Trim();
             if (cmd == "ping") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version } });
-            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit" && cmd != "pin" && cmd != "unpin") return "error unknown command";
+            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit" && cmd != "pin" && cmd != "unpin" && cmd != "check") return "error unknown command";
             var r = Dispatcher.Invoke(new Func<string>(() => LinkOnUi(cmd, arg)), TimeSpan.FromSeconds(5));
             return r as string ?? "error Hallow Vault is busy, try again";
         }
@@ -358,6 +604,13 @@ namespace HallowVault
             if (cmd == "quit") { var qt = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) }; qt.Tick += (s, e) => { qt.Stop(); Quit(); }; qt.Start(); return "ok"; }   // after the reply is sent
             if (cmd == "menu") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "items", MenuItems() } });
             if (cmd == "invoke") return InvokeItem(arg);
+            if (cmd == "check")   // v1.12: checks in the background (no window); the result is in status ("lastCheck", each game's "check")
+            {
+                if (checking) return "error a check is already running";
+                if (arg.Length == 0 || arg.Equals("all", StringComparison.OrdinalIgnoreCase)) { RunCheck(null, true); return "ok"; }
+                var cgm = FindGame(arg); if (cgm == null) return "error Hallow Vault doesn't know a game called " + arg;
+                RunCheck(cgm, true); return "ok";
+            }
             if (arg.Length == 0) return "error which game? (a game name, or all)";
             if (cmd == "backup" && arg.Equals("all", StringComparison.OrdinalIgnoreCase))
             {
@@ -395,10 +648,21 @@ namespace HallowVault
             {
                 List<BackupInfo> hs; if (!history.TryGetValue(g.Id, out hs)) hs = new List<BackupInfo>();
                 gl.Add(new Dictionary<string, object> { { "name", g.Name }, { "installDir", string.IsNullOrEmpty(g.InstallDir) ? null : g.InstallDir },
-                    { "lastBackup", Link.Time(hs.Count == 0 ? (DateTime?)null : hs[0].When) }, { "versions", hs.Count }, { "sizeBytes", hs.Sum(x => x.Bytes) }, { "off", S.Off.Contains(g.Id) }, { "pinned", hs.Count(x => x.Pinned) }, { "alarm", S.Alarms.ContainsKey(g.Id) } });
+                    { "lastBackup", Link.Time(hs.Count == 0 ? (DateTime?)null : hs[0].When) }, { "versions", hs.Count }, { "sizeBytes", hs.Sum(x => x.Bytes) }, { "off", S.Off.Contains(g.Id) }, { "pinned", hs.Count(x => x.Pinned) }, { "alarm", S.Alarms.ContainsKey(g.Id) },
+                    { "custom", g.Source == "custom" }, { "check", CheckWord(Backups.GameDir(Root, g)) } });
             }
+            int cl; DateTime cw; string cs; int fine = 0, warn = 0, bad = 0;
+            foreach (var v in S.Checks.Values) if (Checker.Unpack(v, out cl, out cw, out cs)) { if (cl == 2) bad++; else if (cl == 1) warn++; else fine++; }
+            DateTime lastChk; var hasChk = DateTime.TryParse(S.LastCheck, out lastChk);
+            var check = new Dictionary<string, object> { { "when", hasChk ? Link.Time(lastChk) : null }, { "running", checking }, { "fine", fine }, { "warning", warn }, { "damaged", bad }, { "weekly", S.WeeklyCheck } };
             bool isBusy; lock (busy) isBusy = working;
-            return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "secondCopy", string.IsNullOrEmpty(S.CopyDir) || copyState == null ? null : new Dictionary<string, object> { { "reachable", copyState.Reachable }, { "behind", copyState.Behind }, { "conflicts", copyState.Conflicts.Count } } }, { "games", gl } };
+            return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "secondCopy", string.IsNullOrEmpty(S.CopyDir) || copyState == null ? null : new Dictionary<string, object> { { "reachable", copyState.Reachable }, { "behind", copyState.Behind }, { "conflicts", copyState.Conflicts.Count } } }, { "lastCheck", check }, { "games", gl } };
+        }
+        string CheckWord(string gameDir)   // v1.12: "ok" / "warning" / "damaged" from the last check, or null
+        {
+            string p; int l; DateTime w; string s;
+            if (!S.Checks.TryGetValue(System.IO.Path.GetFileName(gameDir), out p) || !Checker.Unpack(p, out l, out w, out s)) return null;
+            return l >= 2 ? "damaged" : l == 1 ? "warning" : "ok";
         }
         void WriteStatus() { if (!Snap.On) Link.WriteStatus(StatusData()); }
 
@@ -481,7 +745,7 @@ namespace HallowVault
                     try
                     {
                         var local = LocalGame(mg) ?? new Game { Id = mg.Id ?? "custom:" + Library.Norm(mg.Name), Name = mg.Name, Source = "custom" };
-                        var cur = Saves.Find(local, steamUser, S.Extra.ContainsKey(local.Id) ? S.Extra[local.Id] : null);
+                        var cur = Saves.Find(local, steamUser, ExtraOf(local));
                         var nf = Mover.ImportGame(folder, man, mg, here, Root, local, cur);
                         Log.Add(local.Name, "imported from " + (man.Machine ?? "another PC") + " (" + nf + " files)");
                         S.LastSig.Remove(local.Id); S.Alarms.Remove(local.Id); ok++;
@@ -578,7 +842,13 @@ namespace HallowVault
             updateBtn.Click += (s, e) => InstallUpdate();
             if (pending != null) { updateBtn.Content = "Update to v" + pending.Version.ToString(2); updateBtn.Visibility = Visibility.Visible; }
             right.Children.Add(updateBtn);
+            var addGame = new Button { Content = "Add a game", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Back up a game no launcher knows: give it a name and its save folders" };   // v1.12
+            addGame.Click += (s, e) => BuildCustom(null, this).ShowDialog();
+            right.Children.Add(addGame);
             right.Children.Add(allBtn);
+            checkBtn = new Button { Content = "Check backups", Tag = "icon", Width = 36, Height = 34, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Check every backup: each zip opens and every file in it matches (nothing is changed)" };   // v1.12
+            checkBtn.Click += (s, e) => RunCheck(null);
+            right.Children.Add(checkBtn);
             var open = new Button { Content = "Open the vault", Tag = "icon", Width = 36, Height = 34, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Open the folder with your backups" };
             open.Click += (s, e) => { Directory.CreateDirectory(Root); Process.Start("explorer.exe", "\"" + Root + "\""); };
             right.Children.Add(open);
@@ -663,6 +933,16 @@ namespace HallowVault
             sw("Back up a game's saves when it closes", S.OnClose, v => S.OnClose = v);
             sw("Back up a game right before Steam updates it", S.BeforeUpdate, v => S.BeforeUpdate = v);
             sw("Back up everything once a day", S.Daily, v => S.Daily = v);
+            // v1.12: check backups (read-only)
+            var chkRow = new DockPanel { Margin = new Thickness(0, 6, 0, 2) };
+            var chkNow = new Button { Content = "Check all now", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Open every backup and check each file against its checksum - nothing is changed" };
+            chkNow.Click += (s, e) => RunCheck(null);
+            DockPanel.SetDock(chkNow, Dock.Right); chkRow.Children.Add(chkNow);
+            chkRow.Children.Add(new TextBlock { Text = "Check backups", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(chkRow);
+            checkState = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) }; sp.Children.Add(checkState); ShowCheckState();
+            sw("Check every backup once a week", S.WeeklyCheck, v => S.WeeklyCheck = v);
+            sp.Children.Add(new TextBlock { Text = "Every zip must open and every file in it must match its checksum and Vault's list. Only reads - a check never changes or deletes a backup. You're told if something's wrong.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(46, -2, 0, 8) });
             sw("Keep running in the tray when I close the window", S.TrayOnClose, v => S.TrayOnClose = v);
             sw("Start with Windows (in the tray)", StartsWithWindows(), v => SetStartWithWindows(v));
             sw("Use the Hallow icon (Hallow Hub's tray menu, instead of a Vault icon)", S.UseHallowIcon, v => { S.UseHallowIcon = v; CheckTrayHost(); });
@@ -797,15 +1077,24 @@ namespace HallowVault
             steamUser = Saves.SteamUserDir();
             games = Library.Scan(new List<Game>());
             games.Add(Hallow());
+            games.AddRange(S.Custom.Select(c => c.ToGame()));   // v1.12: games you added
             roots.Clear(); history.Clear();
             foreach (var g in games)
             {
-                List<string> extra; S.Extra.TryGetValue(g.Id, out extra);
-                roots[g.Id] = Saves.Find(g, steamUser, extra);
+                roots[g.Id] = Saves.Find(g, steamUser, ExtraOf(g));
                 history[g.Id] = Backups.List(Root, g);
             }
             Fill();
         }
+        // folders you added to a game (and, for a game you added, its save folders)
+        List<string> ExtraOf(Game g)
+        {
+            List<string> ex; S.Extra.TryGetValue(g.Id, out ex);
+            var c = g.Source == "custom" ? S.Custom.FirstOrDefault(x => x.Id == g.Id) : null;
+            if (c == null) return ex;
+            return c.Folders.Concat(ex ?? new List<string>()).ToList();
+        }
+        CustomGame CustomOf(Game g) { return g == null || g.Source != "custom" ? null : S.Custom.FirstOrDefault(x => x.Id == g.Id); }
 
         void Fill()
         {
@@ -860,9 +1149,21 @@ namespace HallowVault
                 op.Click += (s, e) => { var p = rs[0].Path; Process.Start("explorer.exe", File.Exists(p) ? "/select,\"" + p + "\"" : "\"" + p + "\""); };
                 btns.Children.Add(bk); btns.Children.Add(rst); btns.Children.Add(op);
             }
-            var addF = new Button { Content = "Add folder", Tag = rs.Count > 0 ? "icon" : null, Width = rs.Count > 0 ? 32 : double.NaN, Height = 30, Padding = rs.Count > 0 ? new Thickness(0) : new Thickness(12, 5, 12, 5), Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), ToolTip = "Add a folder to back up for this game" };
-            addF.Click += (s, e) => AddFolder(g);
-            btns.Children.Add(addF);
+            var cg = CustomOf(g);
+            if (cg != null)   // v1.12: a game you added - edit its name, folders and .exe (or remove it)
+            {
+                var ed = new Button { Content = "Edit game", Tag = rs.Count > 0 ? "icon" : null, Width = rs.Count > 0 ? 32 : double.NaN, Height = 30, Padding = rs.Count > 0 ? new Thickness(0) : new Thickness(12, 5, 12, 5), Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), ToolTip = "Change this game's name, save folders or program - or remove it (its backups stay)" };
+                ed.Click += (s, e) => BuildCustom(cg, this).ShowDialog();
+                btns.Children.Add(ed);
+            }
+            else
+            {
+                var addF = new Button { Content = "Add folder", Tag = rs.Count > 0 ? "icon" : null, Width = rs.Count > 0 ? 32 : double.NaN, Height = 30, Padding = rs.Count > 0 ? new Thickness(0) : new Thickness(12, 5, 12, 5), Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), ToolTip = "Add a folder to back up for this game" };
+                addF.Click += (s, e) => AddFolder(g);
+                btns.Children.Add(addF);
+            }
+            var mc = new MenuItem { Header = "Check backups" }; mc.Click += (s, e) => RunCheck(g); mc.IsEnabled = hs.Count > 0; cm.Items.Add(mc);   // v1.12
+            if (cg != null) { var me = new MenuItem { Header = "Edit game..." }; me.Click += (s, e) => BuildCustom(cg, this).ShowDialog(); cm.Items.Add(me); }
             if (rs.Count > 0 && g.Source != "hallow")
             {
                 var tg = new Button { Content = off ? "Turn on" : "Turn off", Tag = "icon", Width = 32, Height = 30, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), ToolTip = off ? "Back this game up again" : "Stop backing this game up" };
@@ -882,7 +1183,11 @@ namespace HallowVault
             }
             DockPanel.SetDock(when, Dock.Right); dp.Children.Add(when);
             var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            names.Children.Add(new TextBlock { Text = g.Name, FontSize = 14, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+            var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
+            nameRow.Children.Add(new TextBlock { Text = g.Name, FontSize = 14, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+            if (cg != null) nameRow.Children.Add(new TextBlock { Text = "added by you", FontSize = 10.5, Foreground = (Brush)FindResource("Muted"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 1, 0, 0) });
+            var dot = CheckDot(Backups.GameDir(Root, g)); if (dot != null) nameRow.Children.Add(dot);   // v1.12: the last backup check
+            names.Children.Add(nameRow);
             var where = rs.Count == 0 ? "No save folder found" : string.Join("   ·   ", rs.Select(r => r.Kind + " (" + VaultSettings.Size(r.Bytes) + ")"));
             names.Children.Add(new TextBlock { Text = where, Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, TextTrimming = TextTrimming.CharacterEllipsis,
                 ToolTip = rs.Count == 0 ? null : string.Join("\n", rs.Select(r => r.Path + "  (" + r.Files + " files)")) });
@@ -899,7 +1204,7 @@ namespace HallowVault
                 if (d.ShowDialog() != WF.DialogResult.OK) return;
                 List<string> ex; if (!S.Extra.TryGetValue(g.Id, out ex)) { ex = new List<string>(); S.Extra[g.Id] = ex; }
                 if (!ex.Contains(d.SelectedPath, StringComparer.OrdinalIgnoreCase)) ex.Add(d.SelectedPath);
-                S.Save(); roots[g.Id] = Saves.Find(g, steamUser, ex); Fill();
+                S.Save(); roots[g.Id] = Saves.Find(g, steamUser, ExtraOf(g)); Fill();
                 Status(d.SelectedPath + " is backed up with " + g.Name + " from now on.");
             }
         }
@@ -919,7 +1224,7 @@ namespace HallowVault
                     string msg; bool wait = false; string alarm = null; string logWhat = null;
                     try
                     {
-                        var rs = Saves.Find(g2, steamUser, S.Extra.ContainsKey(g2.Id) ? S.Extra[g2.Id] : null);
+                        var rs = Saves.Find(g2, steamUser, ExtraOf(g2));
                         var sig = Saves.Fingerprint(rs); string old; S.LastSig.TryGetValue(g2.Id, out old);
                         // v1.7: saves that vanished, emptied or shrank a lot are not backed up over (unless you pressed Back up yourself)
                         var hsNow = Backups.List(root, g2);
@@ -944,7 +1249,7 @@ namespace HallowVault
                     catch (Exception ex) { msg = "Couldn't back up " + g2.Name + ": " + ex.Message; logWhat = "failed (" + why + "): " + ex.Message; }
                     Log.Add(g2.Name, logWhat);
                     var m = msg; var gg = g2; var w2 = wait; var why2 = why; var al = alarm; var made = msg != null && msg.Contains(" backed up (");
-                    Dispatcher.BeginInvoke(new Action(() => { if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); if (al != null) RaiseAlarm(gg, al); else if (made && S.Alarms.Remove(gg.Id)) S.Save(); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, S.Extra.ContainsKey(gg.Id) ? S.Extra[gg.Id] : null); Fill(); if (m != null) Status(m); }));
+                    Dispatcher.BeginInvoke(new Action(() => { if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); if (al != null) RaiseAlarm(gg, al); else if (made && S.Alarms.Remove(gg.Id)) S.Save(); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, ExtraOf(gg)); Fill(); if (m != null) Status(m); }));
                 }
                 Dispatcher.BeginInvoke(new Action(() => { allBtn.IsEnabled = true; WriteStatus(); CheckCopy(); }));
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
@@ -1023,7 +1328,7 @@ namespace HallowVault
                     if (MessageBox.Show(w, "Put back " + g.Name + "'s saves from " + bb.When.ToString("dddd d MMM, HH:mm") + "?\n\nYour current saves are backed up first.", "Restore", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
                     try
                     {
-                        var rs = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null); int sk;
+                        var rs = Saves.Find(g, steamUser, ExtraOf(g)); int sk;
                         if (rs.Count > 0) Backups.Make(Root, g, rs, "before restoring", out sk);   // safety copy (not pruned right away)
                         var n = Backups.Restore(bb);
                         Log.Add(g.Name, "restored the version from " + bb.When.ToString("yyyy-MM-dd HH:mm") + " (" + n + " files; the saves from just before were backed up)");
@@ -1053,6 +1358,8 @@ namespace HallowVault
                 };
                 DockPanel.SetDock(pin, Dock.Right); r.Children.Add(pin);
                 t.Children.Add(new TextBlock { Text = VaultSettings.Ago(bb.When) + "   ·   " + VaultSettings.Size(bb.Bytes) + "   ·   " + (bb.Reason ?? ""), Foreground = (Brush)FindResource("Muted"), FontSize = 11.5 });
+                ZipCheck zc; if (zipChecks.TryGetValue(bb.File, out zc) && zc.Level > 0)   // v1.12: what the last check found
+                    t.Children.Add(new TextBlock { Text = "Check: " + Checker.Words[zc.Level] + " - " + zc.Note, Foreground = B(Checker.Colors[zc.Level]), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, MaxWidth = 330 });
                 r.Children.Add(t); lst.Children.Add(r);
             }
             sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 420, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
@@ -1079,7 +1386,7 @@ namespace HallowVault
             sp.Children.Add(sum);
             var lst = new StackPanel();
             sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 380, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
-            var rs = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null);
+            var rs = Saves.Find(g, steamUser, ExtraOf(g));
             var rootPaths = rs.Select(r => r.Path).Concat(hs.SelectMany(b => b.Roots ?? new List<string>())).Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(p => p.Length).ToList();
             Func<string, string> shortName = p =>
             {
@@ -1160,6 +1467,13 @@ namespace HallowVault
             var fg = games.FirstOrDefault(x => roots.ContainsKey(x.Id) && roots[x.Id].Count > 0 && x.Source == "hallow") ?? games.FirstOrDefault(x => roots.ContainsKey(x.Id) && roots[x.Id].Count > 0);
             if (fg != null) { var fw = BuildFilters(fg, this); Snap.Save(fw, System.IO.Path.Combine(dir, "filters.png"), fw.Width, 0); }
             var lw = BuildLog(this); Snap.Save(lw, System.IO.Path.Combine(dir, "log.png"), lw.Width, 0);
+            // v1.12: add / edit a game, and a backup check of the whole vault (read-only)
+            var aw = BuildCustom(null, this); Snap.Save(aw, System.IO.Path.Combine(dir, "addgame.png"), aw.Width, 0);
+            var cg0 = S.Custom.FirstOrDefault(); if (cg0 != null) { var ew = BuildCustom(cg0, this); Snap.Save(ew, System.IO.Path.Combine(dir, "editgame.png"), ew.Width, 0); }
+            ApplyCheck(null, Checker.All(Root, FolderNames(Root)));
+            var kw = BuildCheck(this); Snap.Save(kw, System.IO.Path.Combine(dir, "check.png"), kw.Width, 0); checkBody = null;
+            Fill(); ShowCheckState(); settingsPanel.Visibility = Visibility.Collapsed; Snap.Save(this, System.IO.Path.Combine(dir, "main-checked.png"), 1060, 740);
+            settingsPanel.Visibility = Visibility.Visible; if (ssv != null) { ssv.ScrollToVerticalOffset(260); ssv.UpdateLayout(); } Snap.Save(this, System.IO.Path.Combine(dir, "settings-check.png"), 1060, 740);
             // test copies only: <test folder>\import holds an export to render the import window with
             var impDir = Link.TestDir == null ? null : System.IO.Path.Combine(Link.TestDir, "import"); var im = impDir == null ? null : Mover.Load(impDir);
             if (im != null) { var iw = BuildImport(impDir, im, this); Snap.Save(iw, System.IO.Path.Combine(dir, "import.png"), iw.Width, 0); }

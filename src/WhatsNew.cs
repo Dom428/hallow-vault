@@ -13,6 +13,7 @@ namespace HallowVault
     {
         // Newest first. One or two short lines per version.
         public static readonly Tuple<string, string[]>[] Notes = {
+            Tuple.Create("1.12", new[] { "Check backups (the heart button, or Settings): every zip must open and every file must match its checksum - green, amber or red per game. It only reads; a weekly check is in Settings (off by default)", "Add a game: back up a game no launcher knows - give it a name, its save folders and (optionally) its .exe. Edit or remove it any time; removing never deletes its backups" }),
             Tuple.Create("1.11", new[] { "Saves for 19,000+ games: Vault uses Ludusavi's save database (built from PCGamingWiki), downloaded from GitHub and checked weekly", "Settings > Online save database to turn it off; Vault's own detection still covers games it doesn't know" }),
             Tuple.Create("1.10", new[] { "The second copy shows whether it's up to date, behind or out of reach (USB unplugged) - and catches up by itself", "Spots sync conflict copies your cloud app made in the second copy" }),
             Tuple.Create("1.9", new[] { "Settings: also back up every few hours, and pick the compression (smallest or faster)", "Right-click a game > Files to back up: include or leave out files with patterns like *.sav", "Settings > Backup log: what was backed up, skipped, refused or failed" }),

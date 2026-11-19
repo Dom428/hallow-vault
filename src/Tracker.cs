@@ -36,6 +36,7 @@ namespace HallowVault
         public void Poll(List<Game> games)
         {
             var dirs = games.Where(g => !string.IsNullOrEmpty(g.InstallDir)).Select(g => Tuple.Create(g, g.InstallDir.TrimEnd('\\') + "\\")).ToList();
+            var exes = games.Where(g => !string.IsNullOrEmpty(g.Exe)).ToList();   // v1.12: a game you added runs when its own .exe does
             var seen = new Dictionary<string, string>();
             foreach (var p in Process.GetProcesses())
             {
@@ -43,6 +44,7 @@ namespace HallowVault
                 {
                     if (p.Id <= 4 || Ignore.Contains(p.ProcessName)) continue;
                     var path = PathOf(p.Id); if (path == null) continue;
+                    foreach (var g in exes) if (string.Equals(path, g.Exe, StringComparison.OrdinalIgnoreCase) && !seen.ContainsKey(g.Id)) seen[g.Id] = p.ProcessName;
                     foreach (var d in dirs)
                         if (path.StartsWith(d.Item2, StringComparison.OrdinalIgnoreCase) && !seen.ContainsKey(d.Item1.Id)) { seen[d.Item1.Id] = p.ProcessName; break; }
                 }

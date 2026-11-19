@@ -6,6 +6,11 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.12
+- Check backups (the heart button, or Settings): every zip must open and every file must match
+  its checksum - green, amber or red per game. It only reads. Weekly check in Settings (off).
+- Add a game: back up a game no launcher knows - a name, its save folders and its .exe if you like.
+
 WHAT'S NEW IN 1.11
 - Knows where 19,000+ games keep their saves: Ludusavi's save database (from PCGamingWiki),
   downloaded from GitHub and checked weekly. Settings > Online save database.
@@ -80,6 +85,9 @@ WHAT IT DOES
   which files to back up.
 - The second copy shows whether it's up to date or behind, and catches up by itself.
 - Knows where 19,000+ games keep their saves (online save database, Settings; checked weekly).
+- Check backups: every zip must open and every file must match its checksum - green, amber or red.
+  Only reads, never changes or deletes a backup. Weekly check in Settings (off by default).
+- Add a game: back up a game no launcher knows (name, save folders, optional .exe).
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.

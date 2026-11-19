@@ -16,6 +16,7 @@
 | **1.9** | Back up every 1-12 hours; compression level; include / leave-out patterns per game; backup log |
 | **1.10** | Second copy status (up to date / behind / unreachable), automatic catch-up, cloud sync conflict copies spotted |
 | **1.11** | Online save database: Ludusavi's manifest (from PCGamingWiki) downloaded and re-checked weekly, parsed by a small YAML reader into a cached index; its paths and HKCU keys go first, Vault's finders add the rest |
+| **1.12** | Check backups (every zip opens, CRC-32s and sizes match, the file list recorded in each backup's vault.json matches; green / amber / red per game; weekly check, off by default; read-only); Add a game (name, save folders, optional .exe for the game-closed backup; editable, removing keeps its backups) |
 
 ## Next
 
@@ -28,9 +29,9 @@ Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = ca
 - **Filters / exclusions per game:** buildable here - 1.9.
 - **Cloud upload (rclone, many providers):** not buildable here - needs accounts and a downloaded tool; Vault's second copy into a synced folder covers OneDrive / Google Drive / Dropbox. 1.10 makes it trustworthy (behind / conflicts).
 - **Differential backups (full + changes):** buildable, later - Vault's per-version zips are simpler to restore and saves are small.
-- **Backup validation (check every zip opens and matches):** buildable, later.
+- **Backup validation (check every zip opens and matches):** buildable here - 1.12 (Check backups: opens, CRC-32s, the recorded file list; red / amber / green; weekly, off by default; read-only).
 - **Redirects (restore to a different folder or drive):** partly done - 1.7's import re-maps folders between PCs.
-- **Custom games / your own entries:** done - Add folder on any game; adding games that no launcher knows is buildable, later.
+- **Custom games / your own entries:** done - Add folder on any game; 1.12 adds games no launcher knows (Add a game: name, save folders, optional .exe).
 - **Launch wrapping (back up after a game run from a launcher):** not needed - Vault watches running games itself.
 - **Steam screenshots, Proton / Wine, Steam Deck, Heroic / Lutris:** not buildable here - Windows-only app, no Linux PC to test on.
 - **CLI with JSON output:** partly done - `--cmd status` gives JSON through the running app.

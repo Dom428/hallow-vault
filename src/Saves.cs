@@ -163,7 +163,7 @@ namespace HallowVault
                 if (root == Docs && !guessFolders) continue;   // plain Documents\<game> is a guess too
                 try { foreach (var d in Directory.GetDirectories(root)) if (norm.Length >= 3 && Library.Norm(System.IO.Path.GetFileName(d)) == norm) add(d, "Documents"); } catch { }
             }
-            if (extra != null) foreach (var e in extra) add(e, "Added by you");
+            if (extra != null) foreach (var e in extra) add(e, g.Id != null && g.Id.StartsWith("vaultgame:") ? "Save folder" : "Added by you");   // v1.12: a game you added: its own save folders
             Tuple<string[], string[]> flt = Filters == null ? null : Filters(g.Id);   // v1.9: your include / leave-out patterns for this game
             if (flt != null) foreach (var r in list) { r.Include = flt.Item1; r.Exclude = flt.Item2; }
             foreach (var r in list) Measure(r);
@@ -308,15 +308,17 @@ namespace HallowVault
         [DataMember] public string Game, GameId, Created, Reason;
         [DataMember] public List<string> Roots = new List<string>();   // index in the list = folder number inside the zip
         [DataMember] public List<bool> IsFile = new List<bool>();      // that root is a single file, not a folder
+        [DataMember(EmitDefaultValue = false)] public List<string> Files;   // v1.12: "<entry>\t<bytes>" for every file in the zip (null in older backups)
         public string File; public long Bytes; public bool Pinned;   // v1.7: pinned versions are never pruned
         public DateTime When { get { DateTime d; return DateTime.TryParse(Created, null, System.Globalization.DateTimeStyles.RoundtripKind, out d) ? d.ToLocalTime() : System.IO.File.GetCreationTime(File); } }
     }
 
     public static class Backups
     {
-        static string Safe(string name) { var s = new string(name.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.', ' '); return s.Length == 0 ? "Game" : s; }   // Windows drops trailing dots
+        public static string SafeName(string name) { var s = new string(name.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.', ' '); return s.Length == 0 ? "Game" : s; }   // Windows drops trailing dots
         public static string DefaultRoot()
         {
+            if (Link.TestDir != null) return System.IO.Path.Combine(Link.TestDir, "Hallow Vault");   // v1.12: a test copy never writes into the real vault
             // a second drive keeps backups safe if the system drive dies
             try
             {
@@ -329,7 +331,7 @@ namespace HallowVault
             return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Hallow Vault");
         }
         public static CompressionLevel Level = CompressionLevel.Optimal;   // v1.9: Settings > Compression
-        public static string GameDir(string root, Game g) { return System.IO.Path.Combine(root, Safe(g.Name)); }
+        public static string GameDir(string root, Game g) { return System.IO.Path.Combine(root, string.IsNullOrEmpty(g.Folder) ? SafeName(g.Name) : g.Folder); }   // v1.12: a game you added keeps its folder when renamed
 
         // Makes one zip: <vault>\<game>\<date time>.zip with every save folder inside (folder 0, 1, ...) and a vault.json describing it.
         public static BackupInfo Make(string root, Game g, List<SaveRoot> roots, string reason, out int skipped)
@@ -338,7 +340,7 @@ namespace HallowVault
             var dir = GameDir(root, g); Directory.CreateDirectory(dir);
             var file = System.IO.Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss") + ".zip");
             var tmp = file + ".part";
-            var info = new BackupInfo { Game = g.Name, GameId = g.Id, Created = DateTime.Now.ToString("o"), Reason = reason, Roots = roots.Select(r => r.Path).ToList(), IsFile = roots.Select(r => File.Exists(r.Path)).ToList(), File = file };
+            var info = new BackupInfo { Game = g.Name, GameId = g.Id, Created = DateTime.Now.ToString("o"), Reason = reason, Roots = roots.Select(r => r.Path).ToList(), IsFile = roots.Select(r => File.Exists(r.Path)).ToList(), File = file, Files = new List<string>() };
             using (var fs = new FileStream(tmp, FileMode.Create))
             using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
             {
@@ -349,6 +351,7 @@ namespace HallowVault
                         var text = roots[i].RegText ?? Reg.Export(roots[i].Path); if (text == null) { skipped++; continue; }
                         var re = zip.CreateEntry(i + "/" + Saves.RegFile, Level); re.LastWriteTime = Saves.RegTime;
                         var bytes = Saves.RegBytes(text); using (var dst = re.Open()) dst.Write(bytes, 0, bytes.Length);
+                        info.Files.Add(i + "/" + Saves.RegFile + "\t" + bytes.Length);
                         continue;
                     }
                     foreach (var f in Saves.FilesOf(roots[i]))
@@ -357,9 +360,12 @@ namespace HallowVault
                         {
                             using (var src = new FileStream(f.Item1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                             {
-                                var e = zip.CreateEntry(i + "/" + f.Item2.Replace('\\', '/'), Level);
+                                var name = i + "/" + f.Item2.Replace('\\', '/');
+                                var e = zip.CreateEntry(name, Level);
                                 e.LastWriteTime = File.GetLastWriteTime(f.Item1);
-                                using (var dst = e.Open()) src.CopyTo(dst);
+                                long n = 0; var buf = new byte[81920]; int k;
+                                using (var dst = e.Open()) while ((k = src.Read(buf, 0, buf.Length)) > 0) { dst.Write(buf, 0, k); n += k; }
+                                info.Files.Add(name + "\t" + n);   // v1.12: the file list, for Check backups
                             }
                         }
                         catch { skipped++; }
