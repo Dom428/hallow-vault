@@ -11,7 +11,7 @@ using Microsoft.Win32;
 
 namespace HallowVault
 {
-    public class SaveRoot { public string Path, Kind; public long Bytes; public int Files; }
+    public class SaveRoot { public string Path, Kind; public long Bytes; public int Files; public string RegText; }   // RegText: v1.8, a registry root's .reg export
     public class FileStat { public long Bytes; public DateTime When; }
     // v1.2: one line of "what changed between two versions"
     public class FileChange { public string Path, Kind; public long Old = -1, New = -1; }   // Kind: added, removed, bigger, smaller, changed
@@ -33,7 +33,7 @@ namespace HallowVault
             { "deltaforce", new[] { @"{install}\Game\DeltaForce\Saved\Config", @"{install}\Game\DeltaForce\Saved\SaveGames" } },
         };
         // never copied: caches, logs, crash dumps, and anything secret
-        static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Logs", "Crashes", "webcache", "webcache_4430", "ShaderCache", "Cache", "cache", "D3DCache", "GPUCache", "Telemetry", "Demos", "CrashReportClient" };
+        static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Logs", "Crashes", "webcache", "webcache_4430", "ShaderCache", "Cache", "cache", "D3DCache", "GPUCache", "Telemetry", "Demos", "CrashReportClient", "Screenshots", "PipelineLibrary" };
         static readonly HashSet<string> SkipFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "api.json" };   // Hallow Mixer's local API key
         const long MaxFile = 512L << 20;
         // %APPDATA%\Hallow<App>\status.json (the Hallow family link) - not settings, and rewritten every few seconds
@@ -67,8 +67,11 @@ namespace HallowVault
             {
                 if (string.IsNullOrEmpty(p)) return;
                 p = p.TrimEnd('\\');
-                if ((Directory.Exists(p) || File.Exists(p)) && !list.Any(x => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase) || p.StartsWith(x.Path + "\\", StringComparison.OrdinalIgnoreCase)))
+                if ((Reg.Is(p) ? Reg.Exists(p) : Directory.Exists(p) || File.Exists(p)) && !list.Any(x => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase) || p.StartsWith(x.Path + "\\", StringComparison.OrdinalIgnoreCase)))
+                {
+                    list.RemoveAll(x => x.Path.StartsWith(p + "\\", StringComparison.OrdinalIgnoreCase));   // a folder that holds one we already have replaces it
                     list.Add(new SaveRoot { Path = p, Kind = kind });
+                }
             };
             if (g.Source == "hallow")
             {
@@ -84,6 +87,7 @@ namespace HallowVault
             foreach (var sg in new[] { g }.Concat(g.Alts).Where(x => x.Source == "steam"))
                 foreach (var acc in accounts) add(System.IO.Path.Combine(acc, sg.Id.Substring(6)), acc == steamUser ? "Steam" : "Steam (other account)");
             var dirs = new[] { g }.Concat(g.Alts).Select(x => x.InstallDir).Where(d => !string.IsNullOrEmpty(d) && Directory.Exists(d)).ToList();
+            var devs = new List<Tuple<string, string>>();   // v1.8: (developer, product) from the game's own files
             foreach (var dir in dirs)
             {
                 // Unity: <game>_Data\app.info holds "company" and "product" -> LocalLow\company\product
@@ -92,7 +96,7 @@ namespace HallowVault
                     foreach (var data in Directory.GetDirectories(dir, "*_Data"))
                     {
                         var info = System.IO.Path.Combine(data, "app.info"); if (!File.Exists(info)) continue;
-                        var l = File.ReadAllLines(info); if (l.Length >= 2) add(System.IO.Path.Combine(LocalLow, l[0].Trim(), l[1].Trim()), "Unity");
+                        var l = File.ReadAllLines(info); if (l.Length >= 2) { add(System.IO.Path.Combine(LocalLow, l[0].Trim(), l[1].Trim()), "Unity"); devs.Add(Tuple.Create(l[0].Trim(), l[1].Trim())); }
                     }
                 }
                 catch { }
@@ -108,6 +112,7 @@ namespace HallowVault
                     }
                 }
                 catch { }
+                devs.AddRange(ExeDevs(dir));
             }
             // a few well-known places named after the game
             var norm = Library.Norm(g.Name);
@@ -118,19 +123,65 @@ namespace HallowVault
                     if (k.Contains("{install}")) { foreach (var dir in dirs) add(Expand(k.Replace("{install}", dir.TrimEnd('\\'))), "Known"); }
                     else add(Expand(k), "Known");
                 }
-            foreach (var root in new[] { System.IO.Path.Combine(Docs, "My Games"), System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Saved Games") })
+            // v1.8: folders and registry keys named after the developer: AppData / LocalAppData / LocalLow\<developer>\<game> (only a guess, so only for
+            // games nothing else found), and HKCU\Software\<developer>\<game> (a specific key, always)
+            var guessFolders = !list.Any(x => !x.Kind.StartsWith("Steam"));
+            var gameNames = new HashSet<string>(new[] { g.Name }.Concat(dirs.Select(d => System.IO.Path.GetFileName(d.TrimEnd('\\')))).Select(Library.Norm).Where(n => n.Length >= 3));
+            foreach (var dv in devs.Where(d => !NotDevs.Contains(Library.Norm(d.Item1))).GroupBy(d => Library.Norm(d.Item1) + "|" + Library.Norm(d.Item2)).Select(x => x.First()))
+            {
+                var want = new HashSet<string>(gameNames); var pn = Library.Norm(dv.Item2); if (pn.Length >= 3 && !NotDevs.Contains(pn)) want.Add(pn);
+                foreach (var baseDir in new[] { Roaming, Local, LocalLow })
+                    foreach (var dev in Children(baseDir, Library.Norm(dv.Item1)))
+                        foreach (var gd in Children(dev, want)) if (guessFolders) add(gd, "Developer folder");
+                foreach (var key in RegChildren(@"Software", new HashSet<string> { Library.Norm(dv.Item1) }))
+                    foreach (var gk in RegChildren(key, want)) add(Reg.Prefix + gk, "Registry");
+            }
+            foreach (var root in new[] { System.IO.Path.Combine(Docs, "My Games"), System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Saved Games"), Docs })   // v1.8: Documents\<game> too
             {
                 if (!Directory.Exists(root)) continue;
-                foreach (var d in Directory.GetDirectories(root)) if (Library.Norm(System.IO.Path.GetFileName(d)) == norm) add(d, "Documents");
+                if (root == Docs && !guessFolders) continue;   // plain Documents\<game> is a guess too
+                try { foreach (var d in Directory.GetDirectories(root)) if (norm.Length >= 3 && Library.Norm(System.IO.Path.GetFileName(d)) == norm) add(d, "Documents"); } catch { }
             }
             if (extra != null) foreach (var e in extra) add(e, "Added by you");
             foreach (var r in list) Measure(r);
+            list.RemoveAll(r => (r.Kind == "Developer folder" || r.Kind == "Documents") && r.Bytes > (200L << 20));   // a big guessed folder is a cache, not saves
             return list;
+        }
+
+        // ---- v1.8 helpers for developer-named folders and keys
+        static readonly HashSet<string> NotDevs = new HashSet<string> { "", "unitytechnologies", "unity", "epicgames", "epicgamesinc", "unrealengine", "microsoft", "microsoftcorporation", "nvidia", "nvidiacorporation",
+            "valve", "valvecorporation", "easyanticheat", "battleye", "sentrynativesdk", "theqtcompanyltd", "qt6", "gamesdk", "crashreportclient", "steam", "google", "googlellc", "mozilla", "intel", "intelcorporation", "amd", "advancedmicrodevicesinc" };
+        static IEnumerable<Tuple<string, string>> ExeDevs(string dir)   // CompanyName / ProductName of the game's own .exe files (top two levels)
+        {
+            var res = new List<Tuple<string, string>>();
+            try
+            {
+                var exes = Directory.GetFiles(dir, "*.exe").Concat(Directory.GetDirectories(dir).SelectMany(d => { try { return Directory.GetFiles(d, "*.exe"); } catch { return new string[0]; } })).Take(24);
+                foreach (var e in exes)
+                {
+                    var n = System.IO.Path.GetFileNameWithoutExtension(e).ToLowerInvariant();
+                    if (n.Contains("crash") || n.Contains("unins") || n.Contains("setup") || n.Contains("redist") || n.Contains("anticheat") || n.Contains("launcher_helper")) continue;
+                    try { var v = System.Diagnostics.FileVersionInfo.GetVersionInfo(e); if (!string.IsNullOrWhiteSpace(v.CompanyName)) res.Add(Tuple.Create(v.CompanyName.Trim(), (v.ProductName ?? "").Trim())); } catch { }
+                }
+            }
+            catch { }
+            return res;
+        }
+        static IEnumerable<string> Children(string dir, string norm) { return Children(dir, new HashSet<string> { norm }); }
+        static IEnumerable<string> Children(string dir, HashSet<string> norms)
+        {
+            try { return Directory.Exists(dir) ? Directory.GetDirectories(dir).Where(d => norms.Contains(Library.Norm(System.IO.Path.GetFileName(d)))).ToList() : new List<string>(); } catch { return new List<string>(); }
+        }
+        static IEnumerable<string> RegChildren(string key, HashSet<string> norms)
+        {
+            try { using (var k = Registry.CurrentUser.OpenSubKey(key)) return k == null ? new List<string>() : k.GetSubKeyNames().Where(n => norms.Contains(Library.Norm(n))).Select(n => key + "\\" + n).ToList(); }
+            catch { return new List<string>(); }
         }
 
         // every file a backup would include (skips caches, logs, secrets and huge files)
         public static IEnumerable<Tuple<string, string>> FilesOf(SaveRoot r)   // (full path, path inside the root)
         {
+            if (Reg.Is(r.Path)) yield break;   // registry roots are exported, not copied
             if (File.Exists(r.Path)) { yield return Tuple.Create(r.Path, System.IO.Path.GetFileName(r.Path)); yield break; }
             var stack = new Stack<string>(); stack.Push(r.Path);
             while (stack.Count > 0)
@@ -155,6 +206,7 @@ namespace HallowVault
         static void Measure(SaveRoot r)
         {
             long b = 0; int n = 0;
+            if (Reg.Is(r.Path)) { r.RegText = Reg.Export(r.Path); r.Bytes = r.RegText == null ? 0 : r.RegText.Length * 2; r.Files = r.RegText == null ? 0 : 1; return; }
             foreach (var f in FilesOf(r)) { try { b += new FileInfo(f.Item1).Length; n++; } catch { } }
             r.Bytes = b; r.Files = n;
         }
@@ -170,6 +222,7 @@ namespace HallowVault
         {
             var d = new Dictionary<string, FileStat>(StringComparer.OrdinalIgnoreCase);
             foreach (var r in roots) foreach (var f in FilesOf(r)) { try { var fi = new FileInfo(f.Item1); d[f.Item1] = new FileStat { Bytes = fi.Length, When = fi.LastWriteTime }; } catch { } }
+            foreach (var r in roots.Where(x => Reg.Is(x.Path) && x.RegText != null)) d[System.IO.Path.Combine(r.Path, RegFile)] = new FileStat { Bytes = RegBytes(r.RegText).Length, When = RegTime };
             return d;
         }
         // changes when any file is added, removed, resized or saved again
@@ -177,8 +230,14 @@ namespace HallowVault
         {
             long ticks = 0, bytes = 0; int n = 0;
             foreach (var r in roots) foreach (var f in FilesOf(r)) { try { var fi = new FileInfo(f.Item1); ticks = Math.Max(ticks, fi.LastWriteTimeUtc.Ticks); bytes += fi.Length; n++; } catch { } }
-            return n + "|" + bytes + "|" + ticks;
+            var sig = n + "|" + bytes + "|" + ticks;
+            var reg = roots.Where(r => Reg.Is(r.Path)).Select(r => r.RegText ?? "").ToList();   // v1.8: registry values (only games that have them get the extra part)
+            if (reg.Count > 0) using (var sha = System.Security.Cryptography.SHA1.Create()) sig += "|reg:" + BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", reg)))).Replace("-", "").Substring(0, 16);
+            return sig;
         }
+        public const string RegFile = "registry.reg";
+        public static readonly DateTime RegTime = new DateTime(2000, 1, 1);   // registry exports carry no time: compared by size
+        public static byte[] RegBytes(string text) { return Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(text)).ToArray(); }   // .reg files are UTF-16 with a BOM
     }
 
     [DataContract] public class BackupInfo
@@ -220,6 +279,14 @@ namespace HallowVault
             using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
             {
                 for (int i = 0; i < roots.Count; i++)
+                {
+                    if (Reg.Is(roots[i].Path))   // v1.8: the key as a .reg file
+                    {
+                        var text = roots[i].RegText ?? Reg.Export(roots[i].Path); if (text == null) { skipped++; continue; }
+                        var re = zip.CreateEntry(i + "/" + Saves.RegFile, CompressionLevel.Optimal); re.LastWriteTime = Saves.RegTime;
+                        var bytes = Saves.RegBytes(text); using (var dst = re.Open()) dst.Write(bytes, 0, bytes.Length);
+                        continue;
+                    }
                     foreach (var f in Saves.FilesOf(roots[i]))
                     {
                         try
@@ -233,6 +300,7 @@ namespace HallowVault
                         }
                         catch { skipped++; }
                     }
+                }
                 var m = zip.CreateEntry("vault.json");
                 using (var w = m.Open()) new DataContractJsonSerializer(typeof(BackupInfo)).WriteObject(w, info);
             }
@@ -423,6 +491,13 @@ namespace HallowVault
                 {
                     var dest = Where(b, e); if (dest != null && map != null) dest = map(dest);
                     if (dest == null) continue;
+                    var rk = System.IO.Path.GetDirectoryName(dest);
+                    if (Reg.Is(rk) && System.IO.Path.GetFileName(dest).Equals(Saves.RegFile, StringComparison.OrdinalIgnoreCase))   // v1.8: registry values back into that key only
+                    {
+                        string text; using (var s = e.Open()) using (var r = new StreamReader(s, Encoding.Unicode, true)) text = r.ReadToEnd();
+                        Reg.Import(rk, text); n++; continue;
+                    }
+                    if (Reg.Is(dest)) continue;
                     Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest));
                     e.ExtractToFile(dest, true); n++;
                 }

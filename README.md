@@ -15,6 +15,9 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - **Pins:** pin a version in Restore and it's never pruned or removed by size limits (`pins.txt` next to the zips, copied with the second copy; pipe `pin <game>` / `unpin <game>`).
 - **Save alarm:** if a game's saves vanish, empty or shrink under half of the last backup, Vault doesn't back them up over the good ones and tells you (through Hallow Hub's icon when it hosts it), with Restore one click away.
 - **Move to a new PC:** Settings > Export copies every game's newest version (and pinned ones) with a manifest to a folder; Import on the new PC restores the ticked games after a safety backup, re-mapping your user folder, Documents, AppData, the Steam account and the game folder.
+- **Registry saves:** games that keep saves or settings in `HKCU\Software\<developer>\<game>` (like Unity's PlayerPrefs) are backed up as a `.reg` file inside the zip and put back only into that key, after the usual safety backup.
+- **More saves found without a list:** for games nothing else finds, `Documents\<game>` and AppData / LocalAppData / LocalLow folders named after the developer in the game's own files (big guessed folders are ignored as caches).
+- **Updates itself** from GitHub releases: asks first and checks the download's SHA-256 (Settings > Check for updates).
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.
 

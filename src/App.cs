@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.7.0.0")]
-[assembly: AssemblyFileVersion("1.7.0.0")]
+[assembly: AssemblyVersion("1.8.0.0")]
+[assembly: AssemblyFileVersion("1.8.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.7";
+        public const string Version = "1.8";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -126,6 +126,8 @@ namespace HallowVault
             hostWatch.Start(); CheckTrayHost();
             Dispatcher.BeginInvoke(new Action(CheckDaily), DispatcherPriority.ApplicationIdle);
             Dispatcher.BeginInvoke(new Action(CheckSteamUpdates), DispatcherPriority.ApplicationIdle);
+            DateTime lastCheck; if (!DateTime.TryParse(S.LastUpdateCheck, out lastCheck) || (DateTime.Now - lastCheck).TotalHours > 20) Dispatcher.BeginInvoke(new Action(() => CheckForUpdate(false)), DispatcherPriority.ApplicationIdle);
+            hourly.Tick += (s, e) => { DateTime lc; if (!DateTime.TryParse(S.LastUpdateCheck, out lc) || (DateTime.Now - lc).TotalHours > 20) CheckForUpdate(false); };
             Link.Serve(LinkCommand);
             // What's new after an update (1.0 didn't remember the version, so someone with backups already is coming from 1.0)
             if (string.IsNullOrEmpty(S.LastSeenVersion)) S.LastSeenVersion = S.LastSig.Count > 0 ? "1.0" : Program.Version;
@@ -169,6 +171,41 @@ namespace HallowVault
             ok.Click += (s, e) => w.Close();
             row.Children.Add(det); row.Children.Add(fol); row.Children.Add(ok); sp.Children.Add(row);
             w.Content = sp; return w;
+        }
+
+        // ================================================================ v1.8: updates from GitHub (asks first, checks the SHA-256)
+        Button updateBtn; GhRelease pending;
+        void CheckForUpdate(bool manual)
+        {
+            if (Snap.On) return;
+            if (manual) Status("Checking GitHub for a newer Hallow Vault...");
+            new Thread(() =>
+            {
+                var r = Updater.Latest();
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    S.LastUpdateCheck = DateTime.Now.ToString("o"); S.Save();
+                    if (r == null) { if (manual) Status("Couldn't reach GitHub - try again later."); return; }
+                    if (!Updater.IsNewer(r)) { if (manual) Status("You have the newest version (v" + Program.Version + ")."); return; }
+                    pending = r; updateBtn.Content = "Update to v" + r.Version.ToString(2); updateBtn.Visibility = Visibility.Visible;
+                    updateBtn.ToolTip = (r.Notes ?? "").Length > 600 ? r.Notes.Substring(0, 600) + "..." : r.Notes;
+                    Status("Hallow Vault v" + r.Version.ToString(2) + " is out - click Update at the top (your backups and settings are kept).");
+                }));
+            }) { IsBackground = true }.Start();
+        }
+        void InstallUpdate()
+        {
+            if (pending == null) return;
+            if (Link.TestDir != null) { Status("Test copy: updates aren't installed."); return; }
+            lock (busy) if (working) { Status("A backup is running - update when it's done."); return; }
+            if (MessageBox.Show(this, "Install Hallow Vault v" + pending.Version.ToString(2) + " now?\n\nIt downloads from GitHub, checks the file, and reopens by itself. Your backups and settings are kept.", "Update Hallow Vault", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            updateBtn.IsEnabled = false; updateBtn.Content = "Updating...";
+            var r = pending; S.Save();
+            new Thread(() =>
+            {
+                var err = Updater.Install(r);
+                Dispatcher.BeginInvoke(new Action(() => { if (err != null) { Status(err); updateBtn.IsEnabled = true; updateBtn.Content = "Update to v" + r.Version.ToString(2); } else Status("Installing the update - Hallow Vault reopens in a few seconds."); }));
+            }) { IsBackground = true }.Start();
         }
 
         void ShowWhatsNew()
@@ -412,6 +449,10 @@ namespace HallowVault
             var right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             allBtn = new Button { Content = "Back up everything", Style = (Style)FindResource("Accent"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Back up every game whose saves changed since its last backup" };
             allBtn.Click += (s, e) => { foreach (var g in Backable()) Enqueue(g, "you asked"); };
+            updateBtn = new Button { Content = "Update", Style = (Style)FindResource("Accent"), Margin = new Thickness(0, 0, 8, 0), Visibility = Visibility.Collapsed };   // v1.8
+            updateBtn.Click += (s, e) => InstallUpdate();
+            if (pending != null) { updateBtn.Content = "Update to v" + pending.Version.ToString(2); updateBtn.Visibility = Visibility.Visible; }
+            right.Children.Add(updateBtn);
             right.Children.Add(allBtn);
             var open = new Button { Content = "Open the vault", Tag = "icon", Width = 36, Height = 34, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Open the folder with your backups" };
             open.Click += (s, e) => { Directory.CreateDirectory(Root); Process.Start("explorer.exe", "\"" + Root + "\""); };
@@ -489,7 +530,11 @@ namespace HallowVault
             sw("Use the Hallow accent colour (picked in Hallow Toolkit)", S.UseHallowAccent, v => { S.UseHallowAccent = v; Dispatcher.BeginInvoke(new Action(ApplyAccent)); });
             sp.Children.Add(new TextBlock { Text = "Backups are ordinary .zip files you can open anywhere. Logs, caches and crash dumps are left out, and so are secrets like app keys.",
                 Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
-            sp.Children.Add(new TextBlock { Text = "Hallow Vault " + Program.Version + "  -  icons: Font Awesome Free (CC BY 4.0)", Foreground = (Brush)FindResource("Muted"), FontSize = 11, Margin = new Thickness(0, 10, 0, 0) });
+                        var verRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+            var chk = new Button { Content = "Check for updates", Style = (Style)FindResource("Btn") }; chk.Click += (s, e) => CheckForUpdate(true);
+            DockPanel.SetDock(chk, Dock.Right); verRow.Children.Add(chk);
+            verRow.Children.Add(new TextBlock { Text = "Hallow Vault " + Program.Version + "  -  icons: Font Awesome Free (CC BY 4.0)", Foreground = (Brush)FindResource("Muted"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(verRow);
             b.Child = new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; return b;
         }
 

@@ -6,6 +6,11 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.8
+- Updates itself from GitHub - it asks first (Settings > Check for updates).
+- Games that keep settings in the registry (many Unity games) are backed up too, and more save
+  folders are found for games Vault didn't know.
+
 WHAT'S NEW IN 1.7
 - Pin a version (Restore > pin) so it's never pruned.
 - Save alarm: saves that suddenly shrink or vanish aren't backed up over - restore the last good one.
@@ -57,6 +62,8 @@ WHAT IT DOES
 - Uses the Hallow accent colour picked in Hallow Toolkit. Crash reports stay on this PC (never sent).
 - Pin a version so it's never pruned. Saves that suddenly shrink or vanish aren't backed up over.
 - New PC: Settings > Export on the old one, Import on the new one.
+- Games that keep settings in the registry (many Unity games) are backed up too.
+- Updates itself from GitHub - it asks first (Settings > Check for updates).
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.

@@ -12,13 +12,9 @@
 | **1.5** | One Hallow icon: pipe `open`/`menu`/`invoke`/`quit` for Hub's family tray menu; Vault's icon hidden while Hub hosts it (Use the Hallow icon, on by default); balloons through Hub `notify` |
 | **1.6** | Hallow accent from `%APPDATA%\Hallow\theme.json` (live, Use the Hallow accent on by default); crash reports kept on this PC with a notice next start and `lastCrash` in status |
 | **1.7** | Pin a version (never pruned, kept by size limits); save alarm (shrunk / vanished saves aren't backed up over, notify + Restore); move to a new PC (export newest + pinned with a manifest, import with path re-mapping and a safety backup) |
+| **1.8** | Updates itself from GitHub (asks first, SHA-256 checked); registry saves (HKCU\Software\<developer>\<game>) as .reg in the backup, restored only into that key; Documents\<game> and developer-named AppData folders for games nothing else finds |
 
 ## Next
-
-### 1.8 - Updates and better save detection
-- Updates itself from GitHub (asks first, checks the download's SHA-256)
-- Finds more saves without a manifest: Documents\<game>, and AppData / LocalAppData / LocalLow folders named after the game's developer (from the game's own files)
-- Registry saves (HKCU\Software\<developer>\<game>, like Unity games' settings): exported to a .reg in the backup and put back - only into that game's own key, after a safety backup
 
 ### 1.9 - Schedules, filters and a log
 - Back up every N hours, on top of game-closed and daily
