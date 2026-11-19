@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.6.0.0")]
-[assembly: AssemblyFileVersion("1.6.0.0")]
+[assembly: AssemblyVersion("1.7.0.0")]
+[assembly: AssemblyFileVersion("1.7.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.6";
+        public const string Version = "1.7";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -186,7 +186,7 @@ namespace HallowVault
             var sp = line.IndexOf(' ');
             var cmd = (sp < 0 ? line : line.Substring(0, sp)).ToLowerInvariant(); var arg = sp < 0 ? "" : line.Substring(sp + 1).Trim();
             if (cmd == "ping") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version } });
-            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit") return "error unknown command";
+            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit" && cmd != "pin" && cmd != "unpin") return "error unknown command";
             var r = Dispatcher.Invoke(new Func<string>(() => LinkOnUi(cmd, arg)), TimeSpan.FromSeconds(5));
             return r as string ?? "error Hallow Vault is busy, try again";
         }
@@ -206,6 +206,12 @@ namespace HallowVault
             var game = FindGame(arg);
             if (game == null) return "error Hallow Vault doesn't know a game called " + arg;
             if (roots[game.Id].Count == 0) return "error no save folder found for " + game.Name;
+            if (cmd == "pin" || cmd == "unpin")   // v1.7: pins the newest version (unpin: the newest pinned one)
+            {
+                var hs = Backups.List(Root, game); var b = cmd == "pin" ? hs.FirstOrDefault() : hs.FirstOrDefault(x => x.Pinned);
+                if (b == null) return "error " + (cmd == "pin" ? "no backups of " : "no pinned backup of ") + game.Name;
+                Backups.SetPin(b.File, cmd == "pin"); history[game.Id] = Backups.List(Root, game); Fill(); return "ok";
+            }
             if (cmd == "restore") { var gr = game; Dispatcher.BeginInvoke(new Action(() => { ShowFromTray(); RestoreWindow(gr); })); return "ok"; }
             if (S.Off.Contains(game.Id)) return "error " + game.Name + " is turned off in Hallow Vault";
             Enqueue(game, "asked by another Hallow app", true);
@@ -228,12 +234,104 @@ namespace HallowVault
             {
                 List<BackupInfo> hs; if (!history.TryGetValue(g.Id, out hs)) hs = new List<BackupInfo>();
                 gl.Add(new Dictionary<string, object> { { "name", g.Name }, { "installDir", string.IsNullOrEmpty(g.InstallDir) ? null : g.InstallDir },
-                    { "lastBackup", Link.Time(hs.Count == 0 ? (DateTime?)null : hs[0].When) }, { "versions", hs.Count }, { "sizeBytes", hs.Sum(x => x.Bytes) }, { "off", S.Off.Contains(g.Id) } });
+                    { "lastBackup", Link.Time(hs.Count == 0 ? (DateTime?)null : hs[0].When) }, { "versions", hs.Count }, { "sizeBytes", hs.Sum(x => x.Bytes) }, { "off", S.Off.Contains(g.Id) }, { "pinned", hs.Count(x => x.Pinned) }, { "alarm", S.Alarms.ContainsKey(g.Id) } });
             }
             bool isBusy; lock (busy) isBusy = working;
             return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "games", gl } };
         }
         void WriteStatus() { if (!Snap.On) Link.WriteStatus(StatusData()); }
+
+        // ================================================================ v1.7: save alarm and moving PCs
+        Game alarmGame;   // the game a clicked balloon opens Restore for
+        static string Poss(string n) { return n.EndsWith("s", StringComparison.OrdinalIgnoreCase) ? n + "'" : n + "'s"; }
+        string AlarmText(Game g, string stored) { var i = stored.IndexOf('\n'); return Poss(g.Name) + " saves look damaged: " + (i < 0 ? stored : stored.Substring(i + 1)) + ". Vault didn't back them up, so your last good version is safe - Restore puts it back."; }
+        void RaiseAlarm(Game g, string why)
+        {
+            var hs = Backups.List(Root, g); var key = (hs.Count > 0 ? System.IO.Path.GetFileName(hs[0].File) : "") + "\n" + why;
+            string was; S.Alarms.TryGetValue(g.Id, out was);
+            var lastKey = was == null ? null : was.Split('\n')[0];
+            S.Alarms[g.Id] = key; S.Save(); Fill();
+            Status(AlarmText(g, key));
+            if (lastKey == key.Split('\n')[0]) return;   // already told you about this one
+            alarmGame = g;
+            Notify(Poss(g.Name) + " saves look damaged", why + ". Vault kept your old versions - restore the last good one?" + (hosted ? " (Hallow Vault > Restore)" : " Click here."));
+        }
+        void ExportForNewPc()
+        {
+            using (var d = new WF.FolderBrowserDialog { Description = "Where should the export go? A USB stick or a cloud folder works - a folder called \"Hallow Vault move <date>\" is made inside.", ShowNewFolderButton = true })
+            {
+                if (d.ShowDialog() != WF.DialogResult.OK) return;
+                var root = Root; var dest = d.SelectedPath; var here = Places.Here(steamUser); var all = games.ToList();
+                Status("Exporting your newest versions to " + dest + "...");
+                new Thread(() =>
+                {
+                    string m;
+                    try
+                    {
+                        int n; var outDir = Mover.Export(root, here, id => { var g = all.FirstOrDefault(x => x.Id == id) ?? all.SelectMany(x => x.Alts).FirstOrDefault(x => x.Id == id); return g == null ? null : g.InstallDir; }, dest, out n);
+                        m = n + (n == 1 ? " game" : " games") + " exported to " + outDir + ". On the new PC: Hallow Vault > Settings > Import.";
+                    }
+                    catch (Exception ex) { m = "Couldn't export: " + ex.Message; }
+                    Dispatcher.BeginInvoke(new Action(() => Status(m)));
+                }) { IsBackground = true }.Start();
+            }
+        }
+        void ImportFromOldPc()
+        {
+            using (var d = new WF.FolderBrowserDialog { Description = "Pick the \"Hallow Vault move\" folder you exported on your old PC.", ShowNewFolderButton = false })
+            {
+                if (d.ShowDialog() != WF.DialogResult.OK) return;
+                var man = Mover.Load(d.SelectedPath);
+                if (man == null) { Status("That folder has no Hallow Vault export in it (" + Mover.ManifestName + ")."); return; }
+                BuildImport(d.SelectedPath, man, this).ShowDialog();
+            }
+        }
+        Game LocalGame(MoveGame mg)
+        {
+            return games.FirstOrDefault(x => x.Id == mg.Id || x.Alts.Any(a => a.Id == mg.Id)) ?? games.FirstOrDefault(x => Library.Norm(x.Name) == Library.Norm(mg.Name));
+        }
+        Window BuildImport(string folder, MoveManifest man, Window owner)
+        {
+            var w = Dialog("Import saves", 600, owner);
+            var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
+            sp.Children.Add(new TextBlock { Text = "Import saves from " + (man.Machine ?? "your old PC"), FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+            sp.Children.Add(new TextBlock { Text = "The newest version of each ticked game is put back here, with its folders moved to this PC (your user folder, Documents, the Steam account). The saves already here are backed up first.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            var lst = new StackPanel(); var boxes = new List<Tuple<CheckBox, MoveGame>>();
+            foreach (var mg in man.Games.Where(x => x.Files.Count > 0).OrderBy(x => x.Name))
+            {
+                var local = LocalGame(mg); var b = Backups.Read(System.IO.Path.Combine(folder, mg.Folder, mg.Files[0]));
+                var label = mg.Name + (b == null ? "" : "   \u00B7   " + b.When.ToString("d MMM yyyy, HH:mm") + "   \u00B7   " + VaultSettings.Size(b.Bytes)) + (local == null ? "   \u00B7   not installed here" : "") + (mg.Files.Count > 1 ? "   \u00B7   +" + (mg.Files.Count - 1) + " pinned" : "");
+                var c = new CheckBox { Content = new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap }, IsChecked = local != null && b != null, IsEnabled = b != null, Style = (Style)FindResource("Switch"), Margin = new Thickness(0, 0, 0, 2) };
+                boxes.Add(Tuple.Create(c, mg)); lst.Children.Add(c);
+            }
+            sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 380, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
+            var cancel = new Button { Content = "Cancel", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+            var go = new Button { Content = "Restore all newest", Style = (Style)FindResource("Accent") };
+            go.Click += (s, e) =>
+            {
+                var pick = boxes.Where(x => x.Item1.IsChecked == true).Select(x => x.Item2).ToList(); if (pick.Count == 0) return;
+                var running = pick.Select(LocalGame).Where(x => x != null && Running(x)).Select(x => x.Name).ToList();
+                if (running.Count > 0) { MessageBox.Show(w, "Close " + string.Join(", ", running) + " first - a running game would overwrite the restored files.", "Import", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+                if (MessageBox.Show(w, "Put back the newest saves of " + pick.Count + (pick.Count == 1 ? " game" : " games") + "?\n\nThe saves already on this PC are backed up first.", "Import", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                var here = Places.Here(steamUser); int ok = 0; var fails = new List<string>();
+                foreach (var mg in pick)
+                {
+                    try
+                    {
+                        var local = LocalGame(mg) ?? new Game { Id = mg.Id ?? "custom:" + Library.Norm(mg.Name), Name = mg.Name, Source = "custom" };
+                        var cur = Saves.Find(local, steamUser, S.Extra.ContainsKey(local.Id) ? S.Extra[local.Id] : null);
+                        Mover.ImportGame(folder, man, mg, here, Root, local, cur);
+                        S.LastSig.Remove(local.Id); S.Alarms.Remove(local.Id); ok++;
+                    }
+                    catch (Exception ex) { fails.Add(mg.Name + " (" + ex.Message + ")"); }
+                }
+                S.Save(); w.Close(); Rescan();
+                Status(ok + (ok == 1 ? " game" : " games") + " put back from " + (man.Machine ?? "your old PC") + ". The saves from just before are kept as a backup." + (fails.Count > 0 ? " Couldn't import: " + string.Join(", ", fails) + "." : ""));
+            };
+            row.Children.Add(cancel); row.Children.Add(go); sp.Children.Add(row);
+            w.Content = sp; return w;
+        }
 
         // ================================================================ v1.5: one Hallow icon (Hallow Hub hosts the tray menu)
         // the same useful actions as our own tray menu (Hub adds Open and Exit)
@@ -431,6 +529,15 @@ namespace HallowVault
             };
             limit("Size limit per game", new[] { 0, 100, 250, 500, 1024, 2048, 5120 }, () => S.MaxGameMB, v => S.MaxGameMB = v, "");
             limit("Size limit for the whole vault", new[] { 0, 1024, 5120, 10240, 25600, 51200, 102400 }, () => S.MaxTotalMB, v => S.MaxTotalMB = v, "");
+            // v1.7: move to a new PC
+            var mv = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
+            var imp = new Button { Content = "Import...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Put back the saves you exported on your old PC" };
+            var exp = new Button { Content = "Export...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Every game's newest version (and pinned ones) in one folder, for a new PC" };
+            exp.Click += (s, e) => ExportForNewPc(); imp.Click += (s, e) => ImportFromOldPc();
+            DockPanel.SetDock(imp, Dock.Right); mv.Children.Add(imp); DockPanel.SetDock(exp, Dock.Right); mv.Children.Add(exp);
+            mv.Children.Add(new TextBlock { Text = "Move to a new PC", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(mv);
+            sp.Children.Add(new TextBlock { Text = "Export puts every game's newest version (and pinned ones) in one folder - a USB stick works. Import on the new PC puts them back, each after a safety backup.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
         }
         // copies every backup the second copy doesn't have yet (in the background)
         void CopyNow()
@@ -508,7 +615,7 @@ namespace HallowVault
             {
                 var bk = new Button { Content = "Back up", Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), IsEnabled = !off };
                 bk.Click += (s, e) => Enqueue(g, "you asked", true);
-                var rst = new Button { Content = "Restore", Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), IsEnabled = hs.Count > 0, ToolTip = hs.Count > 0 ? "Put an older version back" : "No backups yet" };
+                var rst = new Button { Content = "Restore", Style = (Style)FindResource(S.Alarms.ContainsKey(g.Id) ? "Accent" : "Btn"), Margin = new Thickness(6, 0, 0, 0), IsEnabled = hs.Count > 0, ToolTip = hs.Count > 0 ? "Put an older version back" : "No backups yet" };
                 rst.Click += (s, e) => RestoreWindow(g);
                 var op = new Button { Content = "Open folder", Tag = "icon", Width = 32, Height = 30, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), ToolTip = "Open the save folder" };
                 op.Click += (s, e) => { var p = rs[0].Path; Process.Start("explorer.exe", File.Exists(p) ? "/select,\"" + p + "\"" : "\"" + p + "\""); };
@@ -525,9 +632,15 @@ namespace HallowVault
             }
             DockPanel.SetDock(btns, Dock.Right); dp.Children.Add(btns);
             var last = hs.Count == 0 ? (DateTime?)null : hs[0].When;
+            var pinned = hs.Count(x => x.Pinned); string alarm; S.Alarms.TryGetValue(g.Id, out alarm);
             var when = new TextBlock { Width = 150, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right, Margin = new Thickness(0, 0, 8, 0),
-                Text = rs.Count == 0 ? "" : off ? "turned off" : hs.Count == 0 ? "not backed up yet" : "backed up " + VaultSettings.Ago(last), Foreground = hs.Count == 0 && rs.Count > 0 && !off ? B("#F0BE5A") : (Brush)FindResource("Muted"),
-                ToolTip = hs.Count == 0 ? null : hs.Count + (hs.Count == 1 ? " backup, " : " backups, ") + VaultSettings.Size(hs.Sum(x => x.Bytes)) };
+                Text = alarm != null ? "saves look damaged" : rs.Count == 0 ? "" : off ? "turned off" : hs.Count == 0 ? "not backed up yet" : "backed up " + VaultSettings.Ago(last),
+                Foreground = alarm != null ? B("#F07070") : hs.Count == 0 && rs.Count > 0 && !off ? B("#F0BE5A") : (Brush)FindResource("Muted"), FontWeight = alarm != null ? FontWeights.SemiBold : FontWeights.Normal,
+                ToolTip = alarm != null ? AlarmText(g, alarm) : hs.Count == 0 ? null : hs.Count + (hs.Count == 1 ? " backup" : " backups") + (pinned > 0 ? " (" + pinned + " pinned)" : "") + ", " + VaultSettings.Size(hs.Sum(x => x.Bytes)) };
+            if (alarm != null && rs.Count == 0)   // the folder is gone: still offer Restore
+            {
+                var rst2 = new Button { Content = "Restore", Style = (Style)FindResource("Accent"), Margin = new Thickness(6, 0, 0, 0) }; rst2.Click += (s, e) => RestoreWindow(g); btns.Children.Insert(0, rst2);
+            }
             DockPanel.SetDock(when, Dock.Right); dp.Children.Add(when);
             var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             names.Children.Add(new TextBlock { Text = g.Name, FontSize = 14, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
@@ -564,12 +677,16 @@ namespace HallowVault
                 {
                     Tuple<Game, string> job; lock (busy) { if (queue.Count == 0) { working = false; break; } job = queue.Dequeue(); }
                     var g2 = job.Item1; var force2 = job.Item2.StartsWith("!"); var why = job.Item2.TrimStart('!');
-                    string msg; bool wait = false;
+                    string msg; bool wait = false; string alarm = null;
                     try
                     {
                         var rs = Saves.Find(g2, steamUser, S.Extra.ContainsKey(g2.Id) ? S.Extra[g2.Id] : null);
                         var sig = Saves.Fingerprint(rs); string old; S.LastSig.TryGetValue(g2.Id, out old);
-                        if (rs.Count == 0) msg = null;
+                        // v1.7: saves that vanished, emptied or shrank a lot are not backed up over (unless you pressed Back up yourself)
+                        var hsNow = Backups.List(root, g2);
+                        if (!(force2 && why == "you asked")) alarm = Backups.Alarm(rs, hsNow.Count > 0 ? hsNow[0] : null);
+                        if (alarm != null) msg = null;
+                        else if (rs.Count == 0) msg = null;
                         else if (!force2 && sig == old && Backups.List(root, g2).Count > 0) msg = null;   // nothing changed
                         else if (Settling(rs)) { msg = null; wait = true; }   // the game is still writing: try again in a bit
                         else
@@ -584,8 +701,8 @@ namespace HallowVault
                         }
                     }
                     catch (Exception ex) { msg = "Couldn't back up " + g2.Name + ": " + ex.Message; }
-                    var m = msg; var gg = g2; var w2 = wait; var why2 = why;
-                    Dispatcher.BeginInvoke(new Action(() => { if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, S.Extra.ContainsKey(gg.Id) ? S.Extra[gg.Id] : null); Fill(); if (m != null) Status(m); }));
+                    var m = msg; var gg = g2; var w2 = wait; var why2 = why; var al = alarm; var made = msg != null && msg.Contains(" backed up (");
+                    Dispatcher.BeginInvoke(new Action(() => { if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); if (al != null) RaiseAlarm(gg, al); else if (made && S.Alarms.Remove(gg.Id)) S.Save(); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, S.Extra.ContainsKey(gg.Id) ? S.Extra[gg.Id] : null); Fill(); if (m != null) Status(m); }));
                 }
                 Dispatcher.BeginInvoke(new Action(() => { allBtn.IsEnabled = true; WriteStatus(); }));
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
@@ -630,7 +747,7 @@ namespace HallowVault
             if (!S.Daily) return;
             DateTime last; if (DateTime.TryParse(S.LastDaily, out last) && (DateTime.Now - last).TotalHours < 20) return;
             S.LastDaily = DateTime.Now.ToString("o"); S.Save();
-            foreach (var g in Backable()) Enqueue(g, "daily");
+            foreach (var g in games.Where(x => !S.Off.Contains(x.Id) && ((roots.ContainsKey(x.Id) && roots[x.Id].Count > 0) || (history.ContainsKey(x.Id) && history[x.Id].Count > 0)))) Enqueue(g, "daily");   // v1.7: also notices a save folder that vanished
         }
 
         bool Running(Game g) { return tracker.Now.ContainsKey(g.Id) || g.Alts.Any(a => tracker.Now.ContainsKey(a.Id)); }
@@ -667,7 +784,7 @@ namespace HallowVault
                         var rs = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null); int sk;
                         if (rs.Count > 0) Backups.Make(Root, g, rs, "before restoring", out sk);   // safety copy (not pruned right away)
                         var n = Backups.Restore(bb);
-                        S.LastSig.Remove(g.Id); S.Save();
+                        S.LastSig.Remove(g.Id); S.Alarms.Remove(g.Id); S.Save();
                         w.Close(); history[g.Id] = Backups.List(Root, g); Fill();
                         Status(n + " files put back for " + g.Name + " (from " + bb.When.ToString("d MMM HH:mm") + "). Your saves from just before are kept as a backup too.");
                     }
@@ -678,7 +795,20 @@ namespace HallowVault
                 cmp.Click += (s, e) => BuildCompare(g, hs, bb, w).ShowDialog();
                 DockPanel.SetDock(cmp, Dock.Right); r.Children.Add(cmp);
                 var t = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-                t.Children.Add(new TextBlock { Text = bb.When.ToString("dddd d MMM yyyy, HH:mm"), FontWeight = FontWeights.SemiBold });
+                // v1.7: pin - never pruned, never removed by size limits
+                var pinRow = new StackPanel { Orientation = Orientation.Horizontal };
+                var pinMark = Icons.Make("thumbtack", 12, Accent.Brush()); pinMark.Margin = new Thickness(0, 0, 6, 0); pinMark.VerticalAlignment = VerticalAlignment.Center; pinMark.Visibility = bb.Pinned ? Visibility.Visible : Visibility.Collapsed;
+                pinRow.Children.Add(pinMark); pinRow.Children.Add(new TextBlock { Text = bb.When.ToString("dddd d MMM yyyy, HH:mm"), FontWeight = FontWeights.SemiBold });
+                t.Children.Add(pinRow);
+                var pin = new Button { Content = bb.Pinned ? "Unpin" : "Pin", Tag = "icon", Width = 32, Height = 30, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 6, 0), ToolTip = bb.Pinned ? "Unpin - this version can be pruned again" : "Pin - this version is never pruned (before a big boss, a finished run)" };
+                pin.Click += (s, e) =>
+                {
+                    try { Backups.SetPin(bb.File, !bb.Pinned); bb.Pinned = !bb.Pinned; } catch (Exception ex) { Status("Couldn't pin that: " + ex.Message); return; }
+                    pin.Content = bb.Pinned ? "Unpin" : "Pin"; pin.ToolTip = bb.Pinned ? "Unpin - this version can be pruned again" : "Pin - this version is never pruned (before a big boss, a finished run)";
+                    pinMark.Visibility = bb.Pinned ? Visibility.Visible : Visibility.Collapsed;
+                    history[g.Id] = Backups.List(Root, g); if (!Snap.On) Fill();
+                };
+                DockPanel.SetDock(pin, Dock.Right); r.Children.Add(pin);
                 t.Children.Add(new TextBlock { Text = VaultSettings.Ago(bb.When) + "   ·   " + VaultSettings.Size(bb.Bytes) + "   ·   " + (bb.Reason ?? ""), Foreground = (Brush)FindResource("Muted"), FontSize = 11.5 });
                 r.Children.Add(t); lst.Children.Add(r);
             }
@@ -772,6 +902,7 @@ namespace HallowVault
             var quit = new WF.ToolStripMenuItem("Quit"); quit.Click += (s, e) => Quit(); menu.Items.Add(quit);
             tray.ContextMenuStrip = menu;
             tray.MouseClick += (s, e) => { if (e.Button == WF.MouseButtons.Left) ShowFromTray(); };
+            tray.BalloonTipClicked += (s, e) => { var g = alarmGame; alarmGame = null; ShowFromTray(); if (g != null) RestoreWindow(g); };   // v1.7: "restore the last good one?"
         }
         public void ShowFromTray() { Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate(); Topmost = true; Topmost = false; }
         void Quit() { exiting = true; S.Save(); WriteStatus(); if (tray != null) { tray.Visible = false; tray.Dispose(); } Application.Current.Shutdown(); }
@@ -781,6 +912,9 @@ namespace HallowVault
             Snap.Save(this, System.IO.Path.Combine(dir, "main.png"), 1060, 740);
             settingsPanel.Visibility = Visibility.Visible; Snap.Save(this, System.IO.Path.Combine(dir, "settings.png"), 1060, 740);
             var cr = Crash.Reports().FirstOrDefault(); if (cr != null) { var cw0 = BuildCrash(cr, this); Snap.Save(cw0, System.IO.Path.Combine(dir, "crash.png"), cw0.Width, 0); }
+            // test copies only: <test folder>\import holds an export to render the import window with
+            var impDir = Link.TestDir == null ? null : System.IO.Path.Combine(Link.TestDir, "import"); var im = impDir == null ? null : Mover.Load(impDir);
+            if (im != null) { var iw = BuildImport(impDir, im, this); Snap.Save(iw, System.IO.Path.Combine(dir, "import.png"), iw.Width, 0); }
             // the restore and compare windows for the first game with two or more backups (read-only)
             var g = games.FirstOrDefault(x => history.ContainsKey(x.Id) && history[x.Id].Count >= 2);
             if (g != null)

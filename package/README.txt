@@ -6,6 +6,11 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.7
+- Pin a version (Restore > pin) so it's never pruned.
+- Save alarm: saves that suddenly shrink or vanish aren't backed up over - restore the last good one.
+- New PC: Settings > Export, then Import on the new PC puts every game's newest saves back.
+
 WHAT'S NEW IN 1.6
 - Uses the Hallow accent colour you pick in Hallow Toolkit (Settings to turn it off).
 - If Vault ever closes unexpectedly it keeps a crash report on this PC and tells you next time.
@@ -50,6 +55,8 @@ WHAT IT DOES
 - Works with Hallow Hub (each game's Saves on its page) and Hallow Remote (Back up now from your phone).
 - With Hallow Hub running, Vault lives in Hub's tray icon instead of its own (Settings > Use the Hallow icon).
 - Uses the Hallow accent colour picked in Hallow Toolkit. Crash reports stay on this PC (never sent).
+- Pin a version so it's never pruned. Saves that suddenly shrink or vanish aren't backed up over.
+- New PC: Settings > Export on the old one, Import on the new one.
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.

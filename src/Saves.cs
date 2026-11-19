@@ -186,7 +186,7 @@ namespace HallowVault
         [DataMember] public string Game, GameId, Created, Reason;
         [DataMember] public List<string> Roots = new List<string>();   // index in the list = folder number inside the zip
         [DataMember] public List<bool> IsFile = new List<bool>();      // that root is a single file, not a folder
-        public string File; public long Bytes;
+        public string File; public long Bytes; public bool Pinned;   // v1.7: pinned versions are never pruned
         public DateTime When { get { DateTime d; return DateTime.TryParse(Created, null, System.Globalization.DateTimeStyles.RoundtripKind, out d) ? d.ToLocalTime() : System.IO.File.GetCreationTime(File); } }
     }
 
@@ -245,6 +245,7 @@ namespace HallowVault
         {
             var dir = GameDir(root, g); var res = new List<BackupInfo>();
             if (!Directory.Exists(dir)) return res;
+            var pins = Pins(dir);
             foreach (var f in Directory.GetFiles(dir, "*.zip").OrderByDescending(f => f))
             {
                 BackupInfo b = null;
@@ -254,21 +255,61 @@ namespace HallowVault
                 }
                 catch { }
                 if (b == null) b = new BackupInfo { Game = g.Name, Reason = "?" };
-                b.File = f; b.Bytes = new FileInfo(f).Length; res.Add(b);
+                b.File = f; b.Bytes = new FileInfo(f).Length; b.Pinned = pins.Contains(System.IO.Path.GetFileName(f)); res.Add(b);
             }
             return res;
         }
 
-        // keeps the newest `keep` backups of a game; only ever deletes Vault's own zips in that game's folder
+        // keeps the newest `keep` backups of a game (pinned ones are kept on top and don't count); only ever deletes Vault's own zips in that game's folder
         public static void Prune(string root, Game g, int keep)
         {
             var dir = GameDir(root, g); if (!Directory.Exists(dir)) return;
-            foreach (var f in Directory.GetFiles(dir, "????-??-?? ??.??.??.zip").OrderByDescending(f => f).Skip(Math.Max(1, keep)))
-                try { File.Delete(f); } catch { }
+            var pins = Pins(dir);
+            foreach (var f in ZipsIn(dir).Where(f => !pins.Contains(f.Name)).Skip(Math.Max(1, keep)))
+                try { f.Delete(); } catch { }
+        }
+
+        // ---- v1.7: pins (a pins.txt next to the zips, one file name per line - it travels with the vault and the second copy)
+        public const string PinsFile = "pins.txt";
+        public static HashSet<string> Pins(string dir)
+        {
+            var h = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try { var f = System.IO.Path.Combine(dir, PinsFile); if (File.Exists(f)) foreach (var l in File.ReadAllLines(f)) if (l.Trim().Length > 0) h.Add(l.Trim()); } catch { }
+            return h;
+        }
+        public static void SetPin(string zip, bool on)
+        {
+            var dir = System.IO.Path.GetDirectoryName(zip); var pins = Pins(dir); var name = System.IO.Path.GetFileName(zip);
+            if (on) pins.Add(name); else pins.Remove(name);
+            pins.RemoveWhere(n => !File.Exists(System.IO.Path.Combine(dir, n)));   // forget pins of deleted zips
+            var f = System.IO.Path.Combine(dir, PinsFile);
+            if (pins.Count == 0) { if (File.Exists(f)) File.Delete(f); } else File.WriteAllLines(f, pins.OrderBy(x => x, StringComparer.Ordinal));
+        }
+        public static BackupInfo Read(string zip)
+        {
+            try
+            {
+                using (var z = ZipFile.OpenRead(zip)) { var m = z.GetEntry("vault.json"); if (m == null) return null; using (var s = m.Open()) { var b = (BackupInfo)new DataContractJsonSerializer(typeof(BackupInfo)).ReadObject(s); b.File = zip; b.Bytes = new FileInfo(zip).Length; return b; } }
+            }
+            catch { return null; }
+        }
+
+        // ---- v1.7: save alarm - saves that suddenly vanish, empty or shrink under half of the last backup aren't backed up over
+        public static string Alarm(List<SaveRoot> now, BackupInfo last)
+        {
+            if (last == null) return null;
+            long before; try { before = Contents(last).Values.Sum(x => x.Bytes); } catch { return null; }
+            if (before == 0) return null;
+            if (now.Count == 0) return "the save folder is gone";
+            long bytes = now.Sum(r => r.Bytes); int files = now.Sum(r => r.Files);
+            if (files == 0) return "the save folder is empty";
+            if (before >= 16 * 1024 && bytes * 2 < before) return "the saves shrank from " + VaultSettings.Size(before) + " to " + VaultSettings.Size(bytes);
+            return null;
         }
 
         // ---- v1.3: size limits and a second copy. Only ever touches Vault's own zips (named by date and time) in game folders.
         const string ZipPattern = "????-??-?? ??.??.??.zip";
+        public static List<FileInfo> ZipsIn(string dir) { return Zips(dir); }
         static List<FileInfo> Zips(string dir)   // newest first (the names sort by time)
         {
             try { return new DirectoryInfo(dir).GetFiles(ZipPattern).OrderByDescending(f => f.Name, StringComparer.Ordinal).ToList(); } catch { return new List<FileInfo>(); }
@@ -281,10 +322,13 @@ namespace HallowVault
             int n = 0; long total = 0; var spare = new List<FileInfo>();
             foreach (var dir in Directory.GetDirectories(root))
             {
-                var fs = Zips(dir); long sum = fs.Sum(f => f.Length);
+                var fs = Zips(dir); long sum = fs.Sum(f => f.Length); var pins = Pins(dir);   // pinned ones count, but are never removed
                 for (int i = fs.Count - 1; i >= 1 && maxGame > 0 && sum > maxGame; i--)
+                {
+                    if (pins.Contains(fs[i].Name)) continue;
                     try { var len = fs[i].Length; fs[i].Delete(); sum -= len; fs.RemoveAt(i); n++; } catch { }
-                total += sum; spare.AddRange(fs.Skip(1));
+                }
+                total += sum; spare.AddRange(fs.Skip(1).Where(f => !pins.Contains(f.Name)));
             }
             if (maxTotal > 0)
                 foreach (var f in spare.OrderBy(f => f.Name, StringComparer.Ordinal))
@@ -309,6 +353,8 @@ namespace HallowVault
                     var to = System.IO.Path.Combine(dst, f.Name); if (File.Exists(to)) continue;
                     var part = to + ".part"; File.Copy(f.FullName, part, true); File.Move(part, to); copied++;
                 }
+                var pf = System.IO.Path.Combine(dir, PinsFile); var pt = System.IO.Path.Combine(dst, PinsFile);   // v1.7: pins go along
+                if (File.Exists(pf)) File.Copy(pf, pt, true); else if (File.Exists(pt)) File.Delete(pt);
                 var oldest = have[have.Count - 1].Name;
                 foreach (var c in Zips(dst)) if (string.CompareOrdinal(c.Name, oldest) < 0) try { c.Delete(); } catch { }
             }
@@ -367,13 +413,16 @@ namespace HallowVault
         }
 
         // Puts a backup's files back where they came from (overwriting those files; nothing else in the folders is deleted).
-        public static int Restore(BackupInfo b)
+        public static int Restore(BackupInfo b) { return Restore(b, null); }
+        // v1.7: `map` moves each file's path (a backup from another PC); null skips that file
+        public static int Restore(BackupInfo b, Func<string, string> map)
         {
             int n = 0;
             using (var z = ZipFile.OpenRead(b.File))
                 foreach (var e in z.Entries)
                 {
-                    var dest = Where(b, e); if (dest == null) continue;
+                    var dest = Where(b, e); if (dest != null && map != null) dest = map(dest);
+                    if (dest == null) continue;
                     Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest));
                     e.ExtractToFile(dest, true); n++;
                 }

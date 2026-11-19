@@ -40,6 +40,7 @@ namespace HallowVault
         [DataMember] public bool UseHallowIcon = true;                  // v1.5: hide our tray icon while Hallow Hub hosts the family menu
         [DataMember] public bool UseHallowAccent = true;                // v1.6: the family accent colour (Hallow Toolkit)
         [DataMember] public string LastCrashShown = "";                 // v1.6: the crash report we already told you about
+        [DataMember] public Dictionary<string, string> Alarms = new Dictionary<string, string>();   // v1.7: game id -> "<last good backup>\n<what looks wrong>"
         [DataMember] public string LastDaily = "";
         [DataMember] public bool TrayOnClose = true;
         [DataMember] public Dictionary<string, List<string>> Extra = new Dictionary<string, List<string>>();   // folders you added, per game
@@ -49,7 +50,7 @@ namespace HallowVault
         [OnDeserializing] void D(StreamingContext c)
         {
             VaultDir = ""; Keep = 10; OnClose = true; Daily = true; LastDaily = ""; TrayOnClose = true; Extra = new Dictionary<string, List<string>>(); Off = new List<string>();
-            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0; UseHallowIcon = true; UseHallowAccent = true; LastCrashShown = "";
+            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0; UseHallowIcon = true; UseHallowAccent = true; LastCrashShown = ""; Alarms = new Dictionary<string, string>();
         }
 
         public static string Dir { get { return Link.TestDir != null ? Path.Combine(Link.TestDir, "HallowVault") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HallowVault"); } }

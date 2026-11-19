@@ -12,6 +12,9 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - **One Hallow icon:** while Hallow Hub hosts the family tray menu, Vault hides its own icon and its actions (Back up everything now, Restore..., Open the vault folder, Back up when a game closes) are in Hub's menu; its messages show from Hub's icon. Pipe commands `open`, `menu`, `invoke <id>`, `quit`. Settings > Use the Hallow icon (on by default); without Hub, Vault keeps its own icon.
 - **Hallow accent:** uses the family accent colour from `%APPDATA%\Hallow\theme.json` (picked in Hallow Toolkit), live; Settings > Use the Hallow accent colour.
 - **Crash reports** stay on this PC (`%APPDATA%\HallowVault\crashes`, newest 20; no settings or file contents) with a notice next time; `status` has `lastCrash`.
+- **Pins:** pin a version in Restore and it's never pruned or removed by size limits (`pins.txt` next to the zips, copied with the second copy; pipe `pin <game>` / `unpin <game>`).
+- **Save alarm:** if a game's saves vanish, empty or shrink under half of the last backup, Vault doesn't back them up over the good ones and tells you (through Hallow Hub's icon when it hosts it), with Restore one click away.
+- **Move to a new PC:** Settings > Export copies every game's newest version (and pinned ones) with a manifest to a folder; Import on the new PC restores the ticked games after a safety backup, re-mapping your user folder, Documents, AppData, the Steam account and the game folder.
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.
 
