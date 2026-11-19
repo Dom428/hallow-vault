@@ -1,0 +1,259 @@
+﻿// Hallow Vault - where each game keeps its saves and settings, and the backups themselves (zip files you can open anywhere).
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+using System.Text;
+using Microsoft.Win32;
+
+namespace HallowVault
+{
+    public class SaveRoot { public string Path, Kind; public long Bytes; public int Files; }
+
+    public static class Saves
+    {
+        static string Local { get { return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData); } }
+        static string Roaming { get { return Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData); } }
+        static string LocalLow { get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"AppData\LocalLow"); } }
+        static string Docs { get { return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments); } }
+
+        // games that keep their settings somewhere no rule can guess
+        static readonly Dictionary<string, string[]> Known = new Dictionary<string, string[]> {
+            { "overwatch", new[] { @"{docs}\Overwatch\Settings" } },
+            { "diabloiv", new[] { @"{docs}\Diablo IV" } },
+            
+            { "minecraft", new[] { @"{roaming}\.minecraft\saves", @"{roaming}\.minecraft\options.txt" } },
+            { "valorant", new[] { @"{local}\VALORANT\Saved\Config" } },
+            
+        };
+        // never copied: caches, logs, crash dumps, and anything secret
+        static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Logs", "Crashes", "webcache", "webcache_4430", "ShaderCache", "Cache", "cache", "D3DCache", "GPUCache", "Telemetry", "Demos", "CrashReportClient" };
+        static readonly HashSet<string> SkipFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "api.json" };   // Hallow Mixer's local API key
+        const long MaxFile = 512L << 20;
+
+        static string Expand(string p) { return p.Replace("{docs}", Docs).Replace("{roaming}", Roaming).Replace("{local}", Local).Replace("{locallow}", LocalLow); }
+
+        // the Steam account signed in now (or the one used last): userdata\<id>
+        public static string SteamUserDir()
+        {
+            var steam = Library.SteamPath(); if (steam == null) return null;
+            var ud = System.IO.Path.Combine(steam, "userdata"); if (!Directory.Exists(ud)) return null;
+            using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam\ActiveProcess"))
+            {
+                var a = k == null ? null : k.GetValue("ActiveUser");
+                if (a is int && (int)a != 0) { var d = System.IO.Path.Combine(ud, ((uint)(int)a).ToString()); if (Directory.Exists(d)) return d; }
+            }
+            return Directory.GetDirectories(ud).Where(d => File.Exists(System.IO.Path.Combine(d, @"config\localconfig.vdf")))
+                .OrderByDescending(d => File.GetLastWriteTime(System.IO.Path.Combine(d, @"config\localconfig.vdf"))).FirstOrDefault();
+        }
+
+        public static List<SaveRoot> Find(Game g, string steamUser, IEnumerable<string> extra)
+        {
+            var list = new List<SaveRoot>();
+            Action<string, string> add = (p, kind) =>
+            {
+                if (string.IsNullOrEmpty(p)) return;
+                p = p.TrimEnd('\\');
+                if ((Directory.Exists(p) || File.Exists(p)) && !list.Any(x => string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase) || p.StartsWith(x.Path + "\\", StringComparison.OrdinalIgnoreCase)))
+                    list.Add(new SaveRoot { Path = p, Kind = kind });
+            };
+            if (g.Source == "hallow")
+            {
+                add(System.IO.Path.Combine(Roaming, "HallowMixer"), "Hallow Mixer");
+                add(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "HallowMixer"), "Hallow Mixer EQ");
+                add(System.IO.Path.Combine(Roaming, "HallowHub"), "Hallow Hub");
+                add(System.IO.Path.Combine(Roaming, "HallowVault"), "Hallow Vault");
+            }
+            // Steam keeps cloud saves and per-game settings under userdata\<account>\<appid>
+            // (every Steam account on this PC that has a folder for the game - the signed-in one first)
+            var accounts = new List<string>();
+            if (steamUser != null) { accounts.Add(steamUser); try { accounts.AddRange(Directory.GetDirectories(System.IO.Path.GetDirectoryName(steamUser)).Where(d => !string.Equals(d, steamUser, StringComparison.OrdinalIgnoreCase))); } catch { } }
+            foreach (var sg in new[] { g }.Concat(g.Alts).Where(x => x.Source == "steam"))
+                foreach (var acc in accounts) add(System.IO.Path.Combine(acc, sg.Id.Substring(6)), acc == steamUser ? "Steam" : "Steam (other account)");
+            var dirs = new[] { g }.Concat(g.Alts).Select(x => x.InstallDir).Where(d => !string.IsNullOrEmpty(d) && Directory.Exists(d)).ToList();
+            foreach (var dir in dirs)
+            {
+                // Unity: <game>_Data\app.info holds "company" and "product" -> LocalLow\company\product
+                try
+                {
+                    foreach (var data in Directory.GetDirectories(dir, "*_Data"))
+                    {
+                        var info = System.IO.Path.Combine(data, "app.info"); if (!File.Exists(info)) continue;
+                        var l = File.ReadAllLines(info); if (l.Length >= 2) add(System.IO.Path.Combine(LocalLow, l[0].Trim(), l[1].Trim()), "Unity");
+                    }
+                }
+                catch { }
+                // Unreal: a project folder inside the game whose name matches LocalAppData\<name>\Saved
+                try
+                {
+                    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var d1 in Directory.GetDirectories(dir)) { names.Add(System.IO.Path.GetFileName(d1)); try { foreach (var d2 in Directory.GetDirectories(d1)) names.Add(System.IO.Path.GetFileName(d2)); } catch { } }
+                    foreach (var n in names)
+                    {
+                        if (n.Equals("Engine", StringComparison.OrdinalIgnoreCase) || SkipDirs.Contains(n)) continue;
+                        var s = System.IO.Path.Combine(Local, n, "Saved"); if (Directory.Exists(s)) add(s, "Unreal");
+                    }
+                }
+                catch { }
+            }
+            // a few well-known places named after the game
+            var norm = Library.Norm(g.Name);
+            string[] known; if (Known.TryGetValue(norm, out known)) foreach (var k in known) add(Expand(k), "Known");
+            foreach (var root in new[] { System.IO.Path.Combine(Docs, "My Games"), System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Saved Games") })
+            {
+                if (!Directory.Exists(root)) continue;
+                foreach (var d in Directory.GetDirectories(root)) if (Library.Norm(System.IO.Path.GetFileName(d)) == norm) add(d, "Documents");
+            }
+            if (extra != null) foreach (var e in extra) add(e, "Added by you");
+            foreach (var r in list) Measure(r);
+            return list;
+        }
+
+        // every file a backup would include (skips caches, logs, secrets and huge files)
+        public static IEnumerable<Tuple<string, string>> FilesOf(SaveRoot r)   // (full path, path inside the root)
+        {
+            if (File.Exists(r.Path)) { yield return Tuple.Create(r.Path, System.IO.Path.GetFileName(r.Path)); yield break; }
+            var stack = new Stack<string>(); stack.Push(r.Path);
+            while (stack.Count > 0)
+            {
+                var d = stack.Pop(); string[] files = new string[0], subs = new string[0];
+                try { files = Directory.GetFiles(d); subs = Directory.GetDirectories(d); } catch { }
+                foreach (var f in files)
+                {
+                    if (SkipFiles.Contains(System.IO.Path.GetFileName(f)) || f.EndsWith(".log", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)) continue;
+                    long len; try { len = new FileInfo(f).Length; } catch { continue; }
+                    if (len > MaxFile) continue;
+                    yield return Tuple.Create(f, f.Substring(r.Path.Length).TrimStart('\\'));
+                }
+                foreach (var s in subs)
+                {
+                    try { if ((new DirectoryInfo(s).Attributes & FileAttributes.ReparsePoint) != 0) continue; } catch { continue; }
+                    if (!SkipDirs.Contains(System.IO.Path.GetFileName(s))) stack.Push(s);
+                }
+            }
+        }
+        static void Measure(SaveRoot r)
+        {
+            long b = 0; int n = 0;
+            foreach (var f in FilesOf(r)) { try { b += new FileInfo(f.Item1).Length; n++; } catch { } }
+            r.Bytes = b; r.Files = n;
+        }
+        // changes when any file is added, removed, resized or saved again
+        public static string Fingerprint(List<SaveRoot> roots)
+        {
+            long ticks = 0, bytes = 0; int n = 0;
+            foreach (var r in roots) foreach (var f in FilesOf(r)) { try { var fi = new FileInfo(f.Item1); ticks = Math.Max(ticks, fi.LastWriteTimeUtc.Ticks); bytes += fi.Length; n++; } catch { } }
+            return n + "|" + bytes + "|" + ticks;
+        }
+    }
+
+    [DataContract] public class BackupInfo
+    {
+        [DataMember] public string Game, GameId, Created, Reason;
+        [DataMember] public List<string> Roots = new List<string>();   // index in the list = folder number inside the zip
+        [DataMember] public List<bool> IsFile = new List<bool>();      // that root is a single file, not a folder
+        public string File; public long Bytes;
+        public DateTime When { get { DateTime d; return DateTime.TryParse(Created, null, System.Globalization.DateTimeStyles.RoundtripKind, out d) ? d.ToLocalTime() : System.IO.File.GetCreationTime(File); } }
+    }
+
+    public static class Backups
+    {
+        static string Safe(string name) { var s = new string(name.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.', ' '); return s.Length == 0 ? "Game" : s; }   // Windows drops trailing dots
+        public static string DefaultRoot()
+        {
+            // a second drive keeps backups safe if the system drive dies
+            try
+            {
+                var sys = System.IO.Path.GetPathRoot(Environment.SystemDirectory);
+                var other = DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady && !string.Equals(d.RootDirectory.FullName, sys, StringComparison.OrdinalIgnoreCase) && d.AvailableFreeSpace > (20L << 30))
+                    .OrderByDescending(d => d.AvailableFreeSpace).FirstOrDefault();
+                if (other != null) return System.IO.Path.Combine(other.RootDirectory.FullName, "Hallow Vault");
+            }
+            catch { }
+            return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Hallow Vault");
+        }
+        public static string GameDir(string root, Game g) { return System.IO.Path.Combine(root, Safe(g.Name)); }
+
+        // Makes one zip: <vault>\<game>\<date time>.zip with every save folder inside (folder 0, 1, ...) and a vault.json describing it.
+        public static BackupInfo Make(string root, Game g, List<SaveRoot> roots, string reason, out int skipped)
+        {
+            skipped = 0;
+            var dir = GameDir(root, g); Directory.CreateDirectory(dir);
+            var file = System.IO.Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss") + ".zip");
+            var tmp = file + ".part";
+            var info = new BackupInfo { Game = g.Name, GameId = g.Id, Created = DateTime.Now.ToString("o"), Reason = reason, Roots = roots.Select(r => r.Path).ToList(), IsFile = roots.Select(r => File.Exists(r.Path)).ToList(), File = file };
+            using (var fs = new FileStream(tmp, FileMode.Create))
+            using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+            {
+                for (int i = 0; i < roots.Count; i++)
+                    foreach (var f in Saves.FilesOf(roots[i]))
+                    {
+                        try
+                        {
+                            using (var src = new FileStream(f.Item1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                            {
+                                var e = zip.CreateEntry(i + "/" + f.Item2.Replace('\\', '/'), CompressionLevel.Optimal);
+                                e.LastWriteTime = File.GetLastWriteTime(f.Item1);
+                                using (var dst = e.Open()) src.CopyTo(dst);
+                            }
+                        }
+                        catch { skipped++; }
+                    }
+                var m = zip.CreateEntry("vault.json");
+                using (var w = m.Open()) new DataContractJsonSerializer(typeof(BackupInfo)).WriteObject(w, info);
+            }
+            File.Move(tmp, file);
+            info.Bytes = new FileInfo(file).Length;
+            return info;
+        }
+
+        public static List<BackupInfo> List(string root, Game g)
+        {
+            var dir = GameDir(root, g); var res = new List<BackupInfo>();
+            if (!Directory.Exists(dir)) return res;
+            foreach (var f in Directory.GetFiles(dir, "*.zip").OrderByDescending(f => f))
+            {
+                BackupInfo b = null;
+                try
+                {
+                    using (var z = ZipFile.OpenRead(f)) { var m = z.GetEntry("vault.json"); if (m != null) using (var s = m.Open()) b = (BackupInfo)new DataContractJsonSerializer(typeof(BackupInfo)).ReadObject(s); }
+                }
+                catch { }
+                if (b == null) b = new BackupInfo { Game = g.Name, Reason = "?" };
+                b.File = f; b.Bytes = new FileInfo(f).Length; res.Add(b);
+            }
+            return res;
+        }
+
+        // keeps the newest `keep` backups of a game; only ever deletes Vault's own zips in that game's folder
+        public static void Prune(string root, Game g, int keep)
+        {
+            var dir = GameDir(root, g); if (!Directory.Exists(dir)) return;
+            foreach (var f in Directory.GetFiles(dir, "????-??-?? ??.??.??.zip").OrderByDescending(f => f).Skip(Math.Max(1, keep)))
+                try { File.Delete(f); } catch { }
+        }
+
+        // Puts a backup's files back where they came from (overwriting those files; nothing else in the folders is deleted).
+        public static int Restore(BackupInfo b)
+        {
+            int n = 0;
+            using (var z = ZipFile.OpenRead(b.File))
+                foreach (var e in z.Entries)
+                {
+                    if (e.FullName == "vault.json" || e.FullName.EndsWith("/")) continue;
+                    var slash = e.FullName.IndexOf('/'); int idx;
+                    if (slash < 0 || !int.TryParse(e.FullName.Substring(0, slash), out idx) || idx >= b.Roots.Count) continue;
+                    var rootPath = b.Roots[idx]; var rel = e.FullName.Substring(slash + 1).Replace('/', '\\');
+                    if (rel.Contains("..")) continue;   // never write outside the save folder
+                    var isFile = b.IsFile != null && idx < b.IsFile.Count && b.IsFile[idx];
+                    var dest = isFile ? rootPath : System.IO.Path.Combine(rootPath, rel);
+                    Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest));
+                    e.ExtractToFile(dest, true); n++;
+                }
+            return n;
+        }
+    }
+}
