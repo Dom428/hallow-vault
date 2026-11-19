@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.2";
+        public const string Version = "1.3";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -279,6 +279,7 @@ namespace HallowVault
                 var c = new CheckBox { Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap }, IsChecked = on, Style = (Style)FindResource("Switch") };
                 c.Click += (s, e) => { set(c.IsChecked == true); S.Save(); }; sp.Children.Add(c); return c;
             };
+            BuildOffPc(sp);
             sw("Back up a game's saves when it closes", S.OnClose, v => S.OnClose = v);
             sw("Back up a game right before Steam updates it", S.BeforeUpdate, v => S.BeforeUpdate = v);
             sw("Back up everything once a day", S.Daily, v => S.Daily = v);
@@ -288,6 +289,56 @@ namespace HallowVault
                 Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
             sp.Children.Add(new TextBlock { Text = "Hallow Vault " + Program.Version + "  -  icons: Font Awesome Free (CC BY 4.0)", Foreground = (Brush)FindResource("Muted"), FontSize = 11, Margin = new Thickness(0, 10, 0, 0) });
             b.Child = sp; return b;
+        }
+
+        // v1.3: second copy folder and size limits
+        void BuildOffPc(StackPanel sp)
+        {
+            sp.Children.Add(new TextBlock { Text = "Second copy", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 4, 0, 4) });
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            var path = new TextBlock { Foreground = (Brush)FindResource("Muted"), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            var off = new Button { Content = "Turn off", Tag = "icon", Width = 32, Height = 30, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), ToolTip = "Stop making a second copy (copies already made stay)" };
+            var pick = new Button { Content = "Pick...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
+            Action show = () => { path.Text = string.IsNullOrEmpty(S.CopyDir) ? "Off" : S.CopyDir; off.Visibility = string.IsNullOrEmpty(S.CopyDir) ? Visibility.Collapsed : Visibility.Visible; };
+            pick.Click += (s, e) =>
+            {
+                using (var d = new WF.FolderBrowserDialog { Description = "Where should Hallow Vault keep a second copy of every backup? A OneDrive, Google Drive or Dropbox folder, or a USB drive.", ShowNewFolderButton = true })
+                {
+                    if (!string.IsNullOrEmpty(S.CopyDir)) d.SelectedPath = S.CopyDir;
+                    if (d.ShowDialog() != WF.DialogResult.OK) return;
+                    if (Backups.Overlaps(d.SelectedPath, Root)) { Status("Pick a folder outside " + Root + " for the second copy."); return; }
+                    S.CopyDir = d.SelectedPath; S.Save(); show(); CopyNow();
+                }
+            };
+            off.Click += (s, e) => { S.CopyDir = ""; S.Save(); show(); Status("No second copy from now on. Copies already made stay where they are."); };
+            show();
+            DockPanel.SetDock(off, Dock.Right); row.Children.Add(off); DockPanel.SetDock(pick, Dock.Right); row.Children.Add(pick); row.Children.Add(path); sp.Children.Add(row);
+            sp.Children.Add(new TextBlock { Text = "A OneDrive, Google Drive or Dropbox folder, or a USB drive. Every backup is copied there too, and old ones go in step with the vault.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            Func<string, int[], Func<int>, Action<int>, string, DockPanel> limit = (label, opts, get, set, unit) =>
+            {
+                var dp = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+                var box = new ComboBox { Style = (Style)FindResource("Combo"), Width = 150 };
+                foreach (var mb in opts) box.Items.Add(new ComboBoxItem { Content = mb == 0 ? "No limit" : VaultSettings.Size(mb * (1L << 20)) + unit, Tag = mb });
+                box.SelectedItem = box.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == get()) ?? box.Items[0];
+                box.SelectionChanged += (s, e) => { var it = box.SelectedItem as ComboBoxItem; if (it != null) { set((int)it.Tag); S.Save(); if ((int)it.Tag > 0) Status("Size limit set - from the next backup, the oldest versions go first (never a game's newest)."); } };
+                DockPanel.SetDock(box, Dock.Right); dp.Children.Add(box);
+                dp.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+                sp.Children.Add(dp); return dp;
+            };
+            limit("Size limit per game", new[] { 0, 100, 250, 500, 1024, 2048, 5120 }, () => S.MaxGameMB, v => S.MaxGameMB = v, "");
+            limit("Size limit for the whole vault", new[] { 0, 1024, 5120, 10240, 25600, 51200, 102400 }, () => S.MaxTotalMB, v => S.MaxTotalMB = v, "");
+        }
+        // copies every backup the second copy doesn't have yet (in the background)
+        void CopyNow()
+        {
+            var root = Root; var copy = S.CopyDir; if (string.IsNullOrEmpty(copy)) return;
+            Status("Copying your backups to " + copy + "...");
+            new Thread(() =>
+            {
+                string m; try { var n = Backups.Mirror(root, copy); m = n == 0 ? "The second copy in " + copy + " is up to date." : n + (n == 1 ? " backup" : " backups") + " copied to " + copy + ". New backups are copied there too."; }
+                catch (Exception ex) { m = "Couldn't copy to " + copy + ": " + ex.Message; }
+                Dispatcher.BeginInvoke(new Action(() => Status(m)));
+            }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
         }
 
         // ================================================================ data -> screen
@@ -402,7 +453,7 @@ namespace HallowVault
         {
             lock (busy) { if (queue.Any(q => q.Item1.Id == g.Id)) return; queue.Enqueue(Tuple.Create(g, force ? "!" + reason : reason)); if (working) return; working = true; }
             allBtn.IsEnabled = false; WriteStatus();
-            var root = Root; var keep = S.Keep;
+            var root = Root; var keep = S.Keep; var maxGame = S.MaxGameMB * (1L << 20); var maxTotal = S.MaxTotalMB * (1L << 20); var copy = S.CopyDir;
             new Thread(() =>
             {
                 while (true)
@@ -421,7 +472,11 @@ namespace HallowVault
                         {
                             int skipped; var b = Backups.Make(root, g2, rs, why, out skipped);
                             S.LastSig[g2.Id] = sig; S.Save(); Backups.Prune(root, g2, keep);
-                            msg = g2.Name + " backed up (" + VaultSettings.Size(b.Bytes) + ")" + (skipped > 0 ? " - " + skipped + " files were in use and skipped" : "") + ".";
+                            var cut = Backups.PruneSize(root, maxGame, maxTotal);   // v1.3: size limits
+                            msg = g2.Name + " backed up (" + VaultSettings.Size(b.Bytes) + ")" + (skipped > 0 ? " - " + skipped + " files were in use and skipped" : "") + "." +
+                                (cut > 0 ? " " + cut + (cut == 1 ? " old backup was" : " old backups were") + " removed to stay under the size limit." : "");
+                            if (!string.IsNullOrEmpty(copy))   // v1.3: second copy, pruned in step
+                                try { Backups.Mirror(root, copy); } catch (Exception ex) { msg += " The second copy couldn't be made (" + ex.Message + ") - it will catch up next time."; }
                         }
                     }
                     catch (Exception ex) { msg = "Couldn't back up " + g2.Name + ": " + ex.Message; }

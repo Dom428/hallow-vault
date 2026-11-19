@@ -35,6 +35,8 @@ namespace HallowVault
         [DataMember] public bool OnClose = true;                        // back up a game's saves when it closes
         [DataMember] public bool Daily = true;                          // and everything once a day
         [DataMember] public bool BeforeUpdate = true;                   // v1.2: and right before Steam updates it
+        [DataMember] public string CopyDir = "";                        // v1.3: second copy of every backup ("" = off)
+        [DataMember] public int MaxGameMB = 0, MaxTotalMB = 0;          // v1.3: size limits (0 = none); oldest versions go first
         [DataMember] public string LastDaily = "";
         [DataMember] public bool TrayOnClose = true;
         [DataMember] public Dictionary<string, List<string>> Extra = new Dictionary<string, List<string>>();   // folders you added, per game
@@ -44,7 +46,7 @@ namespace HallowVault
         [OnDeserializing] void D(StreamingContext c)
         {
             VaultDir = ""; Keep = 10; OnClose = true; Daily = true; LastDaily = ""; TrayOnClose = true; Extra = new Dictionary<string, List<string>>(); Off = new List<string>();
-            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true;
+            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0;
         }
 
         public static string Dir { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HallowVault"); } }

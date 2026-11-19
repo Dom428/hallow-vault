@@ -36,7 +36,13 @@ namespace HallowVault
         static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Logs", "Crashes", "webcache", "webcache_4430", "ShaderCache", "Cache", "cache", "D3DCache", "GPUCache", "Telemetry", "Demos", "CrashReportClient" };
         static readonly HashSet<string> SkipFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "api.json" };   // Hallow Mixer's local API key
         const long MaxFile = 512L << 20;
-        static readonly string OwnStatus = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"HallowVault\status.json");
+        // %APPDATA%\Hallow<App>\status.json (the Hallow family link) - not settings, and rewritten every few seconds
+        static bool IsFamilyStatus(string f)
+        {
+            if (!System.IO.Path.GetFileName(f).Equals("status.json", StringComparison.OrdinalIgnoreCase)) return false;
+            var dir = System.IO.Path.GetDirectoryName(f);
+            return System.IO.Path.GetFileName(dir).StartsWith("Hallow", StringComparison.OrdinalIgnoreCase) && string.Equals(System.IO.Path.GetDirectoryName(dir), Roaming, StringComparison.OrdinalIgnoreCase);
+        }
 
         static string Expand(string p) { return p.Replace("{docs}", Docs).Replace("{roaming}", Roaming).Replace("{local}", Local).Replace("{locallow}", LocalLow); }
 
@@ -133,7 +139,7 @@ namespace HallowVault
                 try { files = Directory.GetFiles(d); subs = Directory.GetDirectories(d); } catch { }
                 foreach (var f in files)
                 {
-                    if (string.Equals(f, OwnStatus, StringComparison.OrdinalIgnoreCase)) continue;   // v1.2: Vault's own status.json changes all the time
+                    if (IsFamilyStatus(f)) continue;   // v1.3: the Hallow apps' status.json files change all the time
                     if (SkipFiles.Contains(System.IO.Path.GetFileName(f)) || f.EndsWith(".log", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)) continue;
                     long len; try { len = new FileInfo(f).Length; } catch { continue; }
                     if (len > MaxFile) continue;
@@ -259,6 +265,64 @@ namespace HallowVault
             var dir = GameDir(root, g); if (!Directory.Exists(dir)) return;
             foreach (var f in Directory.GetFiles(dir, "????-??-?? ??.??.??.zip").OrderByDescending(f => f).Skip(Math.Max(1, keep)))
                 try { File.Delete(f); } catch { }
+        }
+
+        // ---- v1.3: size limits and a second copy. Only ever touches Vault's own zips (named by date and time) in game folders.
+        const string ZipPattern = "????-??-?? ??.??.??.zip";
+        static List<FileInfo> Zips(string dir)   // newest first (the names sort by time)
+        {
+            try { return new DirectoryInfo(dir).GetFiles(ZipPattern).OrderByDescending(f => f.Name, StringComparer.Ordinal).ToList(); } catch { return new List<FileInfo>(); }
+        }
+        // keeps each game under maxGame bytes and the whole vault under maxTotal (0 = no limit): oldest versions go first,
+        // and a game's newest backup is never removed. Returns how many backups were removed.
+        public static int PruneSize(string root, long maxGame, long maxTotal)
+        {
+            if ((maxGame <= 0 && maxTotal <= 0) || !Directory.Exists(root)) return 0;
+            int n = 0; long total = 0; var spare = new List<FileInfo>();
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                var fs = Zips(dir); long sum = fs.Sum(f => f.Length);
+                for (int i = fs.Count - 1; i >= 1 && maxGame > 0 && sum > maxGame; i--)
+                    try { var len = fs[i].Length; fs[i].Delete(); sum -= len; fs.RemoveAt(i); n++; } catch { }
+                total += sum; spare.AddRange(fs.Skip(1));
+            }
+            if (maxTotal > 0)
+                foreach (var f in spare.OrderBy(f => f.Name, StringComparer.Ordinal))
+                {
+                    if (total <= maxTotal) break;
+                    try { var len = f.Length; f.Delete(); total -= len; n++; } catch { }
+                }
+            return n;
+        }
+        // the second copy: copies every backup the copy folder doesn't have yet, and removes copies older than the
+        // oldest backup still in the vault (pruned there). A game folder with no backups in the vault is left alone.
+        public static int Mirror(string root, string copyRoot)
+        {
+            if (string.IsNullOrEmpty(copyRoot) || !Directory.Exists(root)) return 0;
+            int copied = 0;
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                var have = Zips(dir); if (have.Count == 0) continue;
+                var dst = System.IO.Path.Combine(copyRoot, System.IO.Path.GetFileName(dir)); Directory.CreateDirectory(dst);
+                foreach (var f in have)
+                {
+                    var to = System.IO.Path.Combine(dst, f.Name); if (File.Exists(to)) continue;
+                    var part = to + ".part"; File.Copy(f.FullName, part, true); File.Move(part, to); copied++;
+                }
+                var oldest = have[have.Count - 1].Name;
+                foreach (var c in Zips(dst)) if (string.CompareOrdinal(c.Name, oldest) < 0) try { c.Delete(); } catch { }
+            }
+            return copied;
+        }
+        // a copy folder must be somewhere else than the vault (not the same folder, not inside it, not around it)
+        public static bool Overlaps(string a, string b)
+        {
+            try
+            {
+                a = System.IO.Path.GetFullPath(a).TrimEnd('\\') + "\\"; b = System.IO.Path.GetFullPath(b).TrimEnd('\\') + "\\";
+                return a.StartsWith(b, StringComparison.OrdinalIgnoreCase) || b.StartsWith(a, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return true; }
         }
 
         // v1.2: the files inside a backup, by the full path they came from: path -> (size, last write)

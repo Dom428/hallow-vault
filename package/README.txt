@@ -6,6 +6,11 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.3
+- Second copy (Settings): every backup is copied to a OneDrive, Google Drive or Dropbox folder, or a
+  USB drive, and old ones are removed in step.
+- Size limits per game and for the whole vault - the oldest versions go first, never a game's newest.
+
 WHAT'S NEW IN 1.2
 - Restore > Compare: see which files were added, removed, got bigger or smaller before you restore.
 - Backs up a Steam game right before it updates (Settings), and never while a game is still writing
@@ -27,6 +32,8 @@ WHAT IT DOES
   Compare shows which files were added, removed, got bigger or smaller first.
 - Backups are ordinary .zip files. By default they go to a second drive if you have one -
   a network folder (like your server) is even safer: Settings > Change.
+- Second copy (Settings): every backup is copied to a OneDrive / Google Drive / Dropbox folder or a
+  USB drive too. Size limits per game and for the whole vault (oldest versions go first).
 - Logs, caches, crash dumps and secrets (like app keys) are left out.
 
 UNINSTALL
