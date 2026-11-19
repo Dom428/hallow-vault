@@ -13,6 +13,7 @@ namespace HallowVault
     {
         // Newest first. One or two short lines per version.
         public static readonly Tuple<string, string[]>[] Notes = {
+            Tuple.Create("1.9", new[] { "Settings: also back up every few hours, and pick the compression (smallest or faster)", "Right-click a game > Files to back up: include or leave out files with patterns like *.sav", "Settings > Backup log: what was backed up, skipped, refused or failed" }),
             Tuple.Create("1.8", new[] { "Updates itself from GitHub (asks first) - Settings > Check for updates", "Finds more saves: games that keep settings in the registry (like many Unity games), and folders named after the game's developer" }),
             Tuple.Create("1.7", new[] { "Pin a version (Restore > pin) so it's never pruned - before a big boss, a finished run", "Save alarm: saves that suddenly shrink or vanish aren't backed up over - Vault tells you and offers the last good one", "Moving PC? Settings > Export, then Import on the new PC puts every game's newest saves back" }),
             Tuple.Create("1.6", new[] { "Uses the Hallow accent colour you pick in Hallow Toolkit (Settings to turn it off)", "If Vault ever closes unexpectedly, it keeps a crash report on this PC and tells you next time - nothing is sent anywhere" }),

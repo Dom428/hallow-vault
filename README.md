@@ -18,6 +18,9 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - **Registry saves:** games that keep saves or settings in `HKCU\Software\<developer>\<game>` (like Unity's PlayerPrefs) are backed up as a `.reg` file inside the zip and put back only into that key, after the usual safety backup.
 - **More saves found without a list:** for games nothing else finds, `Documents\<game>` and AppData / LocalAppData / LocalLow folders named after the developer in the game's own files (big guessed folders are ignored as caches).
 - **Updates itself** from GitHub releases: asks first and checks the download's SHA-256 (Settings > Check for updates).
+- **Schedules and compression:** also back up every 1-12 hours; compression Smallest / Faster / None.
+- **Files to back up per game** (right-click a game): include and leave-out patterns like `*.sav` or `Screenshots\*`, with a live count.
+- **Backup log** (Settings): every backup, skip, refusal, failure, restore and import with its time, in `%APPDATA%\HallowVault\backup-log.txt`.
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.
 

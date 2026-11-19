@@ -13,14 +13,9 @@
 | **1.6** | Hallow accent from `%APPDATA%\Hallow\theme.json` (live, Use the Hallow accent on by default); crash reports kept on this PC with a notice next start and `lastCrash` in status |
 | **1.7** | Pin a version (never pruned, kept by size limits); save alarm (shrunk / vanished saves aren't backed up over, notify + Restore); move to a new PC (export newest + pinned with a manifest, import with path re-mapping and a safety backup) |
 | **1.8** | Updates itself from GitHub (asks first, SHA-256 checked); registry saves (HKCU\Software\<developer>\<game>) as .reg in the backup, restored only into that key; Documents\<game> and developer-named AppData folders for games nothing else finds |
+| **1.9** | Back up every 1-12 hours; compression level; include / leave-out patterns per game; backup log |
 
 ## Next
-
-### 1.9 - Schedules, filters and a log
-- Back up every N hours, on top of game-closed and daily
-- Compression level (smaller or faster)
-- Include / leave out patterns per game
-- Backup log: what was backed up, skipped, refused or failed, and when
 
 ### 1.10 - Second copy you can trust
 - The second copy shows when it's behind (drive missing, copies not made yet) and catches up by itself

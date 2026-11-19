@@ -11,7 +11,7 @@ using Microsoft.Win32;
 
 namespace HallowVault
 {
-    public class SaveRoot { public string Path, Kind; public long Bytes; public int Files; public string RegText; }   // RegText: v1.8, a registry root's .reg export
+    public class SaveRoot { public string Path, Kind; public long Bytes; public int Files; public string RegText; public string[] Include, Exclude; }   // Include/Exclude: v1.9 patterns   // RegText: v1.8, a registry root's .reg export
     public class FileStat { public long Bytes; public DateTime When; }
     // v1.2: one line of "what changed between two versions"
     public class FileChange { public string Path, Kind; public long Old = -1, New = -1; }   // Kind: added, removed, bigger, smaller, changed
@@ -143,9 +143,29 @@ namespace HallowVault
                 try { foreach (var d in Directory.GetDirectories(root)) if (norm.Length >= 3 && Library.Norm(System.IO.Path.GetFileName(d)) == norm) add(d, "Documents"); } catch { }
             }
             if (extra != null) foreach (var e in extra) add(e, "Added by you");
+            Tuple<string[], string[]> flt = Filters == null ? null : Filters(g.Id);   // v1.9: your include / leave-out patterns for this game
+            if (flt != null) foreach (var r in list) { r.Include = flt.Item1; r.Exclude = flt.Item2; }
             foreach (var r in list) Measure(r);
             list.RemoveAll(r => (r.Kind == "Developer folder" || r.Kind == "Documents") && r.Bytes > (200L << 20));   // a big guessed folder is a cache, not saves
             return list;
+        }
+
+        // ---- v1.9: include / leave-out patterns per game ("*.sav", "Screenshots\*", "slot?.dat"; a pattern with no "\" matches the file name anywhere)
+        public static Func<string, Tuple<string[], string[]>> Filters;
+        public static bool Wanted(string rel, SaveRoot r)
+        {
+            if (r.Exclude != null && r.Exclude.Any(p => Match(p, rel))) return false;
+            return r.Include == null || r.Include.Length == 0 || r.Include.Any(p => Match(p, rel));
+        }
+        static readonly Dictionary<string, System.Text.RegularExpressions.Regex> patCache = new Dictionary<string, System.Text.RegularExpressions.Regex>();
+        public static bool Match(string pattern, string rel)
+        {
+            pattern = (pattern ?? "").Trim().Replace('/', '\\').TrimStart('\\'); if (pattern.Length == 0) return false;
+            System.Text.RegularExpressions.Regex re;
+            lock (patCache)
+                if (!patCache.TryGetValue(pattern, out re))
+                    patCache[pattern] = re = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace(@"\*", ".*").Replace(@"\?", ".") + "$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return re.IsMatch(pattern.Contains("\\") ? rel : System.IO.Path.GetFileName(rel));
         }
 
         // ---- v1.8 helpers for developer-named folders and keys
@@ -194,7 +214,9 @@ namespace HallowVault
                     if (SkipFiles.Contains(System.IO.Path.GetFileName(f)) || f.EndsWith(".log", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)) continue;
                     long len; try { len = new FileInfo(f).Length; } catch { continue; }
                     if (len > MaxFile) continue;
-                    yield return Tuple.Create(f, f.Substring(r.Path.Length).TrimStart('\\'));
+                    var rel = f.Substring(r.Path.Length).TrimStart('\\');
+                    if (!Wanted(rel, r)) continue;   // v1.9
+                    yield return Tuple.Create(f, rel);
                 }
                 foreach (var s in subs)
                 {
@@ -265,6 +287,7 @@ namespace HallowVault
             catch { }
             return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Hallow Vault");
         }
+        public static CompressionLevel Level = CompressionLevel.Optimal;   // v1.9: Settings > Compression
         public static string GameDir(string root, Game g) { return System.IO.Path.Combine(root, Safe(g.Name)); }
 
         // Makes one zip: <vault>\<game>\<date time>.zip with every save folder inside (folder 0, 1, ...) and a vault.json describing it.
@@ -283,7 +306,7 @@ namespace HallowVault
                     if (Reg.Is(roots[i].Path))   // v1.8: the key as a .reg file
                     {
                         var text = roots[i].RegText ?? Reg.Export(roots[i].Path); if (text == null) { skipped++; continue; }
-                        var re = zip.CreateEntry(i + "/" + Saves.RegFile, CompressionLevel.Optimal); re.LastWriteTime = Saves.RegTime;
+                        var re = zip.CreateEntry(i + "/" + Saves.RegFile, Level); re.LastWriteTime = Saves.RegTime;
                         var bytes = Saves.RegBytes(text); using (var dst = re.Open()) dst.Write(bytes, 0, bytes.Length);
                         continue;
                     }
@@ -293,7 +316,7 @@ namespace HallowVault
                         {
                             using (var src = new FileStream(f.Item1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                             {
-                                var e = zip.CreateEntry(i + "/" + f.Item2.Replace('\\', '/'), CompressionLevel.Optimal);
+                                var e = zip.CreateEntry(i + "/" + f.Item2.Replace('\\', '/'), Level);
                                 e.LastWriteTime = File.GetLastWriteTime(f.Item1);
                                 using (var dst = e.Open()) src.CopyTo(dst);
                             }

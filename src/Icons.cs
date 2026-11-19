@@ -20,7 +20,7 @@ namespace HallowVault
         static readonly Dictionary<string, string> Labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
             { "Back up everything", "floppy-disk" }, { "Back up", "floppy-disk" }, { "Restore", "clock-rotate-left" }, { "Restore this", "clock-rotate-left" },
             { "Open folder", "folder-open" }, { "Open the vault", "folder-open" }, { "Add folder", "plus" }, { "Turn off", "power-off" }, { "Turn on", "power-off" },
-            { "Refresh", "arrows-rotate" }, { "Settings", "gear" }, { "Change...", "pen" }, { "Cancel", "xmark" }, { "x", "xmark" }, { "OK", "check" }, { "Compare", "magnifying-glass" }, { "Pick...", "folder-open" }, { "Show details", "note-sticky" }, { "Pin", "thumbtack" }, { "Unpin", "thumbtack" }, { "Export...", "box-open" }, { "Import...", "download" }, { "Restore all newest", "clock-rotate-left" }, { "Check for updates", "arrows-rotate" }, { "Update", "download" }, { "Close", "xmark" }, { "Got it", "check" },
+            { "Refresh", "arrows-rotate" }, { "Settings", "gear" }, { "Change...", "pen" }, { "Cancel", "xmark" }, { "x", "xmark" }, { "OK", "check" }, { "Compare", "magnifying-glass" }, { "Pick...", "folder-open" }, { "Show details", "note-sticky" }, { "Pin", "thumbtack" }, { "Unpin", "thumbtack" }, { "Export...", "box-open" }, { "Import...", "download" }, { "Restore all newest", "clock-rotate-left" }, { "Check for updates", "arrows-rotate" }, { "Update", "download" }, { "Backup log", "list" }, { "Save", "check" }, { "Close", "xmark" }, { "Got it", "check" },
         };
         static readonly string[][] Prefixes = { new[] { "Update to", "download" } };
         public static string ForLabel(string label)

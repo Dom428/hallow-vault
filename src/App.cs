@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.8.0.0")]
-[assembly: AssemblyFileVersion("1.8.0.0")]
+[assembly: AssemblyVersion("1.9.0.0")]
+[assembly: AssemblyFileVersion("1.9.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.8";
+        public const string Version = "1.9";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -85,6 +85,9 @@ namespace HallowVault
         public VaultWindow(bool hidden)
         {
             startHidden = hidden;
+            // v1.9: your include / leave-out patterns and the compression level
+            Saves.Filters = id => { List<string> inc, exc; S.Include.TryGetValue(id, out inc); S.Exclude.TryGetValue(id, out exc); return inc == null && exc == null ? null : Tuple.Create((inc ?? new List<string>()).ToArray(), (exc ?? new List<string>()).ToArray()); };
+            ApplyCompression();
             Title = "Hallow Vault"; Width = 1060; Height = 740; MinWidth = 880; MinHeight = 560;
             Background = (Brush)FindResource("Bg"); Foreground = (Brush)FindResource("Text"); FontFamily = new FontFamily("Segoe UI"); FontSize = 12.5;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -124,6 +127,9 @@ namespace HallowVault
             hostWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             hostWatch.Tick += (s, e) => CheckTrayHost();
             hostWatch.Start(); CheckTrayHost();
+            sched = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };   // v1.9: every N hours
+            sched.Tick += (s, e) => CheckSchedule();
+            sched.Start();
             Dispatcher.BeginInvoke(new Action(CheckDaily), DispatcherPriority.ApplicationIdle);
             Dispatcher.BeginInvoke(new Action(CheckSteamUpdates), DispatcherPriority.ApplicationIdle);
             DateTime lastCheck; if (!DateTime.TryParse(S.LastUpdateCheck, out lastCheck) || (DateTime.Now - lastCheck).TotalHours > 20) Dispatcher.BeginInvoke(new Action(() => CheckForUpdate(false)), DispatcherPriority.ApplicationIdle);
@@ -170,6 +176,87 @@ namespace HallowVault
             var ok = new Button { Content = "OK", Style = (Style)FindResource("Accent"), MinWidth = 80, IsDefault = true, IsCancel = true };
             ok.Click += (s, e) => w.Close();
             row.Children.Add(det); row.Children.Add(fol); row.Children.Add(ok); sp.Children.Add(row);
+            w.Content = sp; return w;
+        }
+
+        // ================================================================ v1.9: schedule, compression, filters, log
+        DispatcherTimer sched;
+        void ApplyCompression() { Backups.Level = S.Compression == "fast" ? System.IO.Compression.CompressionLevel.Fastest : S.Compression == "none" ? System.IO.Compression.CompressionLevel.NoCompression : System.IO.Compression.CompressionLevel.Optimal; }
+        void CheckSchedule()
+        {
+            if (S.EveryHours <= 0) return;
+            DateTime last; if (DateTime.TryParse(S.LastScheduled, out last) && (DateTime.Now - last).TotalHours < S.EveryHours) return;
+            S.LastScheduled = DateTime.Now.ToString("o"); S.Save();
+            foreach (var g in Backable()) Enqueue(g, "every " + (S.EveryHours == 1 ? "hour" : S.EveryHours + " hours"));
+        }
+        Window BuildLog(Window owner)
+        {
+            var w = Dialog("Backup log", 760, owner);
+            var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
+            sp.Children.Add(new TextBlock { Text = "Backup log", FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+            sp.Children.Add(new TextBlock { Text = "Newest first - what was backed up, skipped, refused or failed. It stays on this PC.", Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(0, 0, 0, 10) });
+            var lst = new StackPanel(); var lines = Log.Recent(300);
+            if (lines.Count == 0) lst.Children.Add(new TextBlock { Text = "Nothing yet.", Foreground = (Brush)FindResource("Muted") });
+            foreach (var l in lines)
+            {
+                var d = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+                var t = new TextBlock { Text = l[0].Length >= 16 ? l[0].Substring(5, 11) : l[0], Width = 92, Foreground = (Brush)FindResource("Muted") }; DockPanel.SetDock(t, Dock.Left); d.Children.Add(t);
+                var gname = new TextBlock { Text = l[1], Width = 150, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis }; DockPanel.SetDock(gname, Dock.Left); d.Children.Add(gname);
+                var what = l[2]; var col = what.StartsWith("backed up") || what.StartsWith("restored") || what.StartsWith("imported") ? "#6ED28C" : what.StartsWith("refused") || what.StartsWith("failed") ? "#F07070" : what.StartsWith("waiting") ? "#F0BE5A" : null;
+                d.Children.Add(new TextBlock { Text = what, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = what, Foreground = col == null ? (Brush)FindResource("Muted") : B(col) });
+                lst.Children.Add(d);
+            }
+            sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 440, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+            var open = new Button { Content = "Open folder", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0) };
+            open.Click += (s, e) => { try { Process.Start("explorer.exe", System.IO.File.Exists(Log.File) ? "/select,\"" + Log.File + "\"" : "\"" + VaultSettings.Dir + "\""); } catch { } };
+            var close = new Button { Content = "Close", Style = (Style)FindResource("Btn"), IsCancel = true };
+            row.Children.Add(open); row.Children.Add(close); sp.Children.Add(row);
+            w.Content = sp; return w;
+        }
+        // include / leave-out patterns for one game, with a live count of what a backup would hold
+        Window BuildFilters(Game g, Window owner)
+        {
+            var w = Dialog("Files to back up - " + g.Name, 560, owner);
+            var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
+            sp.Children.Add(new TextBlock { Text = "Files to back up for " + g.Name, FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4), TextWrapping = TextWrapping.Wrap });
+            sp.Children.Add(new TextBlock { Text = "One pattern per line. * is any text, ? one character. \"*.sav\" matches by file name anywhere; \"Screenshots\\*\" matches a folder inside the save folder.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
+            List<string> inc0, exc0; S.Include.TryGetValue(g.Id, out inc0); S.Exclude.TryGetValue(g.Id, out exc0);
+            Func<string, List<string>, TextBox> box = (label, cur) =>
+            {
+                sp.Children.Add(new TextBlock { Text = label, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 4, 0, 4) });
+                var tb = new TextBox { Style = (Style)FindResource("Field"), AcceptsReturn = true, Height = 76, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Text = cur == null ? "" : string.Join("\r\n", cur), FontFamily = new FontFamily("Consolas") };
+                sp.Children.Add(tb); return tb;
+            };
+            var inc = box("Only back up (empty = everything)", inc0); var exc = box("Leave out", exc0);
+            var count = new TextBlock { Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(0, 8, 0, 0), TextWrapping = TextWrapping.Wrap };
+            sp.Children.Add(count);
+            Func<TextBox, List<string>> lines = tb => tb.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).Distinct().ToList();
+            var rs0 = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null);
+            Action recount = () =>
+            {
+                int n = 0, all = 0; long b = 0; var i = lines(inc).ToArray(); var x = lines(exc).ToArray();
+                foreach (var r in rs0.Where(r => !Reg.Is(r.Path)))
+                {
+                    var probe = new SaveRoot { Path = r.Path }; var keep = new SaveRoot { Path = r.Path, Include = i, Exclude = x };
+                    foreach (var f in Saves.FilesOf(probe)) { all++; if (Saves.Wanted(f.Item2, keep)) { n++; try { b += new FileInfo(f.Item1).Length; } catch { } } }
+                }
+                count.Text = "With these rules a backup holds " + n + " of " + all + " files (" + VaultSettings.Size(b) + ")" + (rs0.Any(r => Reg.Is(r.Path)) ? ", plus its registry key." : ".");
+            };
+            inc.TextChanged += (s, e) => recount(); exc.TextChanged += (s, e) => recount(); recount();
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
+            var cancel = new Button { Content = "Cancel", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+            var save = new Button { Content = "Save", Style = (Style)FindResource("Accent"), MinWidth = 80 };
+            save.Click += (s, e) =>
+            {
+                var i = lines(inc); var x = lines(exc);
+                if (i.Count > 0) S.Include[g.Id] = i; else S.Include.Remove(g.Id);
+                if (x.Count > 0) S.Exclude[g.Id] = x; else S.Exclude.Remove(g.Id);
+                S.LastSig.Remove(g.Id); S.Save(); w.Close();
+                roots[g.Id] = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null); Fill();
+                Status(i.Count + x.Count == 0 ? "Everything in " + g.Name + "'s save folders is backed up again." : "Saved - " + g.Name + "'s next backup follows these rules.");
+            };
+            row.Children.Add(cancel); row.Children.Add(save); sp.Children.Add(row);
             w.Content = sp; return w;
         }
 
@@ -358,7 +445,8 @@ namespace HallowVault
                     {
                         var local = LocalGame(mg) ?? new Game { Id = mg.Id ?? "custom:" + Library.Norm(mg.Name), Name = mg.Name, Source = "custom" };
                         var cur = Saves.Find(local, steamUser, S.Extra.ContainsKey(local.Id) ? S.Extra[local.Id] : null);
-                        Mover.ImportGame(folder, man, mg, here, Root, local, cur);
+                        var nf = Mover.ImportGame(folder, man, mg, here, Root, local, cur);
+                        Log.Add(local.Name, "imported from " + (man.Machine ?? "another PC") + " (" + nf + " files)");
                         S.LastSig.Remove(local.Id); S.Alarms.Remove(local.Id); ok++;
                     }
                     catch (Exception ex) { fails.Add(mg.Name + " (" + ex.Message + ")"); }
@@ -515,6 +603,20 @@ namespace HallowVault
             DockPanel.SetDock(keepBox, Dock.Right); keep.Children.Add(keepBox);
             keep.Children.Add(new TextBlock { Text = "Backups to keep (oldest go first)", VerticalAlignment = VerticalAlignment.Center });
             sp.Children.Add(keep);
+            // v1.9: every N hours, compression, log
+            Func<string, object[], string[], object, Action<object>, ComboBox> pickRow = (label, vals, names, cur, set) =>
+            {
+                var dp = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+                var box = new ComboBox { Style = (Style)FindResource("Combo"), Width = 150 };
+                for (int i = 0; i < vals.Length; i++) box.Items.Add(new ComboBoxItem { Content = names[i], Tag = vals[i] });
+                box.SelectedItem = box.Items.Cast<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, cur)) ?? box.Items[0];
+                box.SelectionChanged += (s, e) => { var it = box.SelectedItem as ComboBoxItem; if (it != null) { set(it.Tag); S.Save(); } };
+                DockPanel.SetDock(box, Dock.Right); dp.Children.Add(box);
+                dp.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+                sp.Children.Add(dp); return box;
+            };
+            pickRow("Also back up every", new object[] { 0, 1, 2, 4, 8, 12 }, new[] { "Off", "hour", "2 hours", "4 hours", "8 hours", "12 hours" }, S.EveryHours, v => { S.EveryHours = (int)v; S.LastScheduled = DateTime.Now.ToString("o"); });
+            pickRow("Compression", new object[] { "best", "fast", "none" }, new[] { "Smallest", "Faster", "None (fastest)" }, S.Compression, v => { S.Compression = (string)v; ApplyCompression(); });
             Func<string, bool, Action<bool>, CheckBox> sw = (text, on, set) =>
             {
                 var c = new CheckBox { Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap }, IsChecked = on, Style = (Style)FindResource("Switch") };
@@ -579,7 +681,9 @@ namespace HallowVault
             var imp = new Button { Content = "Import...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Put back the saves you exported on your old PC" };
             var exp = new Button { Content = "Export...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Every game's newest version (and pinned ones) in one folder, for a new PC" };
             exp.Click += (s, e) => ExportForNewPc(); imp.Click += (s, e) => ImportFromOldPc();
-            DockPanel.SetDock(imp, Dock.Right); mv.Children.Add(imp); DockPanel.SetDock(exp, Dock.Right); mv.Children.Add(exp);
+            var logBtn = new Button { Content = "Backup log", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "What was backed up, skipped, refused or failed, and when" };
+            logBtn.Click += (s, e) => BuildLog(this).ShowDialog();
+            DockPanel.SetDock(logBtn, Dock.Right); mv.Children.Add(logBtn); DockPanel.SetDock(imp, Dock.Right); mv.Children.Add(imp); DockPanel.SetDock(exp, Dock.Right); mv.Children.Add(exp);
             mv.Children.Add(new TextBlock { Text = "Move to a new PC", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
             sp.Children.Add(mv);
             sp.Children.Add(new TextBlock { Text = "Export puts every game's newest version (and pinned ones) in one folder - a USB stick works. Import on the new PC puts them back, each after a safety backup.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
@@ -648,7 +752,9 @@ namespace HallowVault
         Border Row(Game g)
         {
             var rs = roots[g.Id]; var hs = history[g.Id]; var off = S.Off.Contains(g.Id);
-            var row = new Border { Background = (Brush)FindResource("Panel"), CornerRadius = new CornerRadius(12), Padding = new Thickness(8, 8, 12, 8), Margin = new Thickness(0, 0, 0, 8), Opacity = rs.Count == 0 || off ? 0.6 : 1 };
+            var cm = new ContextMenu(); var mi = new MenuItem { Header = "Files to back up (include / leave out)..." }; mi.Click += (s, e) => BuildFilters(g, this).ShowDialog(); cm.Items.Add(mi);   // v1.9
+            List<string> fi0, fe0; S.Include.TryGetValue(g.Id, out fi0); S.Exclude.TryGetValue(g.Id, out fe0);
+            var row = new Border { ContextMenu = cm, ToolTip = fi0 != null || fe0 != null ? "Your file rules apply (right-click to change)" : null, Background = (Brush)FindResource("Panel"), CornerRadius = new CornerRadius(12), Padding = new Thickness(8, 8, 12, 8), Margin = new Thickness(0, 0, 0, 8), Opacity = rs.Count == 0 || off ? 0.6 : 1 };
             var dp = new DockPanel();
             var art = Img(g.Header);
             var thumb = new Border { Width = 116, Height = 54, CornerRadius = new CornerRadius(8), Margin = new Thickness(0, 0, 14, 0), VerticalAlignment = VerticalAlignment.Center,
@@ -722,7 +828,7 @@ namespace HallowVault
                 {
                     Tuple<Game, string> job; lock (busy) { if (queue.Count == 0) { working = false; break; } job = queue.Dequeue(); }
                     var g2 = job.Item1; var force2 = job.Item2.StartsWith("!"); var why = job.Item2.TrimStart('!');
-                    string msg; bool wait = false; string alarm = null;
+                    string msg; bool wait = false; string alarm = null; string logWhat = null;
                     try
                     {
                         var rs = Saves.Find(g2, steamUser, S.Extra.ContainsKey(g2.Id) ? S.Extra[g2.Id] : null);
@@ -730,22 +836,25 @@ namespace HallowVault
                         // v1.7: saves that vanished, emptied or shrank a lot are not backed up over (unless you pressed Back up yourself)
                         var hsNow = Backups.List(root, g2);
                         if (!(force2 && why == "you asked")) alarm = Backups.Alarm(rs, hsNow.Count > 0 ? hsNow[0] : null);
-                        if (alarm != null) msg = null;
-                        else if (rs.Count == 0) msg = null;
-                        else if (!force2 && sig == old && Backups.List(root, g2).Count > 0) msg = null;   // nothing changed
-                        else if (Settling(rs)) { msg = null; wait = true; }   // the game is still writing: try again in a bit
+                        if (alarm != null) { msg = null; logWhat = "refused (" + why + "): " + alarm + " - kept the old versions"; }
+                        else if (rs.Count == 0) { msg = null; logWhat = "skipped (" + why + "): no save folder"; }
+                        else if (!force2 && sig == old && Backups.List(root, g2).Count > 0) { msg = null; logWhat = "skipped (" + why + "): no changes"; }   // nothing changed
+                        else if (Settling(rs)) { msg = null; wait = true; logWhat = "waiting (" + why + "): the game is still writing its saves"; }   // the game is still writing: try again in a bit
                         else
                         {
                             int skipped; var b = Backups.Make(root, g2, rs, why, out skipped);
+                            logWhat = "backed up (" + why + "): " + VaultSettings.Size(b.Bytes) + ", " + rs.Sum(x => x.Files) + " files" + (skipped > 0 ? ", " + skipped + " in use and skipped" : "");
                             S.LastSig[g2.Id] = sig; S.Save(); Backups.Prune(root, g2, keep);
                             var cut = Backups.PruneSize(root, maxGame, maxTotal);   // v1.3: size limits
                             msg = g2.Name + " backed up (" + VaultSettings.Size(b.Bytes) + ")" + (skipped > 0 ? " - " + skipped + " files were in use and skipped" : "") + "." +
                                 (cut > 0 ? " " + cut + (cut == 1 ? " old backup was" : " old backups were") + " removed to stay under the size limit." : "");
                             if (!string.IsNullOrEmpty(copy))   // v1.3: second copy, pruned in step
-                                try { Backups.Mirror(root, copy); } catch (Exception ex) { msg += " The second copy couldn't be made (" + ex.Message + ") - it will catch up next time."; }
+                                try { Backups.Mirror(root, copy); } catch (Exception ex) { msg += " The second copy couldn't be made (" + ex.Message + ") - it will catch up next time."; logWhat += "; second copy failed: " + ex.Message; }
+                            if (cut > 0) logWhat += "; " + cut + " old backup(s) removed for the size limit";
                         }
                     }
-                    catch (Exception ex) { msg = "Couldn't back up " + g2.Name + ": " + ex.Message; }
+                    catch (Exception ex) { msg = "Couldn't back up " + g2.Name + ": " + ex.Message; logWhat = "failed (" + why + "): " + ex.Message; }
+                    Log.Add(g2.Name, logWhat);
                     var m = msg; var gg = g2; var w2 = wait; var why2 = why; var al = alarm; var made = msg != null && msg.Contains(" backed up (");
                     Dispatcher.BeginInvoke(new Action(() => { if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); if (al != null) RaiseAlarm(gg, al); else if (made && S.Alarms.Remove(gg.Id)) S.Save(); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, S.Extra.ContainsKey(gg.Id) ? S.Extra[gg.Id] : null); Fill(); if (m != null) Status(m); }));
                 }
@@ -829,6 +938,7 @@ namespace HallowVault
                         var rs = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null); int sk;
                         if (rs.Count > 0) Backups.Make(Root, g, rs, "before restoring", out sk);   // safety copy (not pruned right away)
                         var n = Backups.Restore(bb);
+                        Log.Add(g.Name, "restored the version from " + bb.When.ToString("yyyy-MM-dd HH:mm") + " (" + n + " files; the saves from just before were backed up)");
                         S.LastSig.Remove(g.Id); S.Alarms.Remove(g.Id); S.Save();
                         w.Close(); history[g.Id] = Backups.List(Root, g); Fill();
                         Status(n + " files put back for " + g.Name + " (from " + bb.When.ToString("d MMM HH:mm") + "). Your saves from just before are kept as a backup too.");
@@ -957,6 +1067,9 @@ namespace HallowVault
             Snap.Save(this, System.IO.Path.Combine(dir, "main.png"), 1060, 740);
             settingsPanel.Visibility = Visibility.Visible; Snap.Save(this, System.IO.Path.Combine(dir, "settings.png"), 1060, 740);
             var cr = Crash.Reports().FirstOrDefault(); if (cr != null) { var cw0 = BuildCrash(cr, this); Snap.Save(cw0, System.IO.Path.Combine(dir, "crash.png"), cw0.Width, 0); }
+            var fg = games.FirstOrDefault(x => roots.ContainsKey(x.Id) && roots[x.Id].Count > 0 && x.Source == "hallow") ?? games.FirstOrDefault(x => roots.ContainsKey(x.Id) && roots[x.Id].Count > 0);
+            if (fg != null) { var fw = BuildFilters(fg, this); Snap.Save(fw, System.IO.Path.Combine(dir, "filters.png"), fw.Width, 0); }
+            var lw = BuildLog(this); Snap.Save(lw, System.IO.Path.Combine(dir, "log.png"), lw.Width, 0);
             // test copies only: <test folder>\import holds an export to render the import window with
             var impDir = Link.TestDir == null ? null : System.IO.Path.Combine(Link.TestDir, "import"); var im = impDir == null ? null : Mover.Load(impDir);
             if (im != null) { var iw = BuildImport(impDir, im, this); Snap.Save(iw, System.IO.Path.Combine(dir, "import.png"), iw.Width, 0); }
