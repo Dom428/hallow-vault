@@ -12,6 +12,9 @@ using Microsoft.Win32;
 namespace HallowVault
 {
     public class SaveRoot { public string Path, Kind; public long Bytes; public int Files; }
+    public class FileStat { public long Bytes; public DateTime When; }
+    // v1.2: one line of "what changed between two versions"
+    public class FileChange { public string Path, Kind; public long Old = -1, New = -1; }   // Kind: added, removed, bigger, smaller, changed
 
     public static class Saves
     {
@@ -33,6 +36,7 @@ namespace HallowVault
         static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Logs", "Crashes", "webcache", "webcache_4430", "ShaderCache", "Cache", "cache", "D3DCache", "GPUCache", "Telemetry", "Demos", "CrashReportClient" };
         static readonly HashSet<string> SkipFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "api.json" };   // Hallow Mixer's local API key
         const long MaxFile = 512L << 20;
+        static readonly string OwnStatus = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"HallowVault\status.json");
 
         static string Expand(string p) { return p.Replace("{docs}", Docs).Replace("{roaming}", Roaming).Replace("{local}", Local).Replace("{locallow}", LocalLow); }
 
@@ -129,6 +133,7 @@ namespace HallowVault
                 try { files = Directory.GetFiles(d); subs = Directory.GetDirectories(d); } catch { }
                 foreach (var f in files)
                 {
+                    if (string.Equals(f, OwnStatus, StringComparison.OrdinalIgnoreCase)) continue;   // v1.2: Vault's own status.json changes all the time
                     if (SkipFiles.Contains(System.IO.Path.GetFileName(f)) || f.EndsWith(".log", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)) continue;
                     long len; try { len = new FileInfo(f).Length; } catch { continue; }
                     if (len > MaxFile) continue;
@@ -146,6 +151,20 @@ namespace HallowVault
             long b = 0; int n = 0;
             foreach (var f in FilesOf(r)) { try { b += new FileInfo(f.Item1).Length; n++; } catch { } }
             r.Bytes = b; r.Files = n;
+        }
+        // v1.2: when a game last wrote any of its save files (UTC) - backups wait until this is ~10 s in the past
+        public static DateTime NewestWrite(List<SaveRoot> roots)
+        {
+            var t = DateTime.MinValue;
+            foreach (var r in roots) foreach (var f in FilesOf(r)) { try { var w = File.GetLastWriteTimeUtc(f.Item1); if (w > t) t = w; } catch { } }
+            return t;
+        }
+        // v1.2: every file in the save folders right now: full path -> (size, last write)
+        public static Dictionary<string, FileStat> Contents(List<SaveRoot> roots)
+        {
+            var d = new Dictionary<string, FileStat>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in roots) foreach (var f in FilesOf(r)) { try { var fi = new FileInfo(f.Item1); d[f.Item1] = new FileStat { Bytes = fi.Length, When = fi.LastWriteTime }; } catch { } }
+            return d;
         }
         // changes when any file is added, removed, resized or saved again
         public static string Fingerprint(List<SaveRoot> roots)
@@ -242,6 +261,47 @@ namespace HallowVault
                 try { File.Delete(f); } catch { }
         }
 
+        // v1.2: the files inside a backup, by the full path they came from: path -> (size, last write)
+        public static Dictionary<string, FileStat> Contents(BackupInfo b)
+        {
+            var d = new Dictionary<string, FileStat>(StringComparer.OrdinalIgnoreCase);
+            using (var z = ZipFile.OpenRead(b.File))
+                foreach (var e in z.Entries)
+                {
+                    string dest = Where(b, e); if (dest == null) continue;
+                    d[dest] = new FileStat { Bytes = e.Length, When = e.LastWriteTime.LocalDateTime };
+                }
+            return d;
+        }
+        // where a zip entry goes back to (null for vault.json, folders and anything that would land outside its save folder)
+        static string Where(BackupInfo b, ZipArchiveEntry e)
+        {
+            if (e.FullName == "vault.json" || e.FullName.EndsWith("/")) return null;
+            var slash = e.FullName.IndexOf('/'); int idx;
+            if (slash < 0 || !int.TryParse(e.FullName.Substring(0, slash), out idx) || idx >= b.Roots.Count) return null;
+            var rootPath = b.Roots[idx]; var rel = e.FullName.Substring(slash + 1).Replace('/', '\\');
+            if (rel.Contains("..")) return null;   // never write outside the save folder
+            var isFile = b.IsFile != null && idx < b.IsFile.Count && b.IsFile[idx];
+            return isFile ? rootPath : System.IO.Path.Combine(rootPath, rel);
+        }
+
+        // v1.2: what changed from `older` to `newer` (sizes in bytes; "changed" = same size, saved again)
+        public static List<FileChange> Diff(Dictionary<string, FileStat> older, Dictionary<string, FileStat> newer, out int same)
+        {
+            var res = new List<FileChange>(); same = 0;
+            foreach (var kv in newer)
+            {
+                FileStat o;
+                if (!older.TryGetValue(kv.Key, out o)) res.Add(new FileChange { Path = kv.Key, Kind = "added", New = kv.Value.Bytes });
+                else if (o.Bytes != kv.Value.Bytes) res.Add(new FileChange { Path = kv.Key, Kind = kv.Value.Bytes > o.Bytes ? "bigger" : "smaller", Old = o.Bytes, New = kv.Value.Bytes });
+                else if (Math.Abs((kv.Value.When - o.When).TotalSeconds) > 2.5) res.Add(new FileChange { Path = kv.Key, Kind = "changed", Old = o.Bytes, New = kv.Value.Bytes });   // zip times are 2-second steps
+                else same++;
+            }
+            foreach (var kv in older) if (!newer.ContainsKey(kv.Key)) res.Add(new FileChange { Path = kv.Key, Kind = "removed", Old = kv.Value.Bytes });
+            var order = new[] { "added", "removed", "bigger", "smaller", "changed" };
+            return res.OrderBy(c => Array.IndexOf(order, c.Kind)).ThenBy(c => c.Path, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
         // Puts a backup's files back where they came from (overwriting those files; nothing else in the folders is deleted).
         public static int Restore(BackupInfo b)
         {
@@ -249,13 +309,7 @@ namespace HallowVault
             using (var z = ZipFile.OpenRead(b.File))
                 foreach (var e in z.Entries)
                 {
-                    if (e.FullName == "vault.json" || e.FullName.EndsWith("/")) continue;
-                    var slash = e.FullName.IndexOf('/'); int idx;
-                    if (slash < 0 || !int.TryParse(e.FullName.Substring(0, slash), out idx) || idx >= b.Roots.Count) continue;
-                    var rootPath = b.Roots[idx]; var rel = e.FullName.Substring(slash + 1).Replace('/', '\\');
-                    if (rel.Contains("..")) continue;   // never write outside the save folder
-                    var isFile = b.IsFile != null && idx < b.IsFile.Count && b.IsFile[idx];
-                    var dest = isFile ? rootPath : System.IO.Path.Combine(rootPath, rel);
+                    var dest = Where(b, e); if (dest == null) continue;
                     Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest));
                     e.ExtractToFile(dest, true); n++;
                 }

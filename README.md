@@ -3,8 +3,8 @@
 Backs up your game saves and settings - part of the Hallow family with [Hallow Hub](https://github.com/Dom428/hallow-hub), [Hallow Mixer](https://github.com/Dom428/hallow-mixer) and [Hallow Toolkit](https://github.com/Dom428/hallow-toolkit).
 
 - **Finds your saves by itself:** Steam's per-game folders (every account on the PC), Unity games (`LocalLow\company\product` from the game's `app.info`), Unreal games (`LocalAppData\<project>\Saved`), and a few well-known places. Add any folder yourself.
-- **Backs up when a game closes** (only if something changed) **and once a day**, keeping the last 10 versions per game.
-- **Restore any version** - your current saves are backed up first.
+- **Backs up when a game closes** (only if something changed), **right before Steam updates a game** (the app manifest says an update is waiting or starting) **and once a day**, keeping the last 10 versions per game. Never while the game is still writing: it waits until no save file has changed for 10 seconds.
+- **Restore any version** - your current saves are backed up first. **Compare** shows which files were added, removed, got bigger or smaller (between two versions, or a version and your saves now).
 - Backups are plain **.zip** files, on a second drive by default (or any folder / network share you pick).
 - Leaves out logs, caches, crash dumps and secrets.
 - **Hallow family link:** Hallow Hub and Hallow Remote see your backups and can start one. Named pipe `HallowFamily.Vault.<user>` (`ping`, `status`, `backup <game>`, `backup all`, `restore <game>` opens the restore window; current user only), `HallowVault.exe --cmd "backup all"` for scripts and Stream Deck, and `%APPDATA%\HallowVault\status.json`.

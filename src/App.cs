@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.1";
+        public const string Version = "1.2";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -75,7 +75,9 @@ namespace HallowVault
         readonly Tracker tracker = new Tracker();
         string steamUser;
         StackPanel list; TextBlock summary, status; Border settingsPanel; ToggleButton gearBtn; Button allBtn;
-        WF.NotifyIcon tray; DispatcherTimer poll, hourly;
+        WF.NotifyIcon tray; DispatcherTimer poll, hourly, updWatch;
+        readonly Dictionary<string, bool> updState = new Dictionary<string, bool>();   // v1.2: Steam app id -> update waiting/running
+        readonly Dictionary<string, int> settleTries = new Dictionary<string, int>();   // v1.2: game id -> times we waited for its files to settle
         readonly object busy = new object(); bool working; readonly Queue<Tuple<Game, string>> queue = new Queue<Tuple<Game, string>>();
 
         string Root { get { return !string.IsNullOrEmpty(S.VaultDir) ? S.VaultDir : Backups.DefaultRoot(); } }
@@ -117,7 +119,11 @@ namespace HallowVault
             hourly = new DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
             hourly.Tick += (s, e) => CheckDaily();
             hourly.Start();
+            updWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+            updWatch.Tick += (s, e) => CheckSteamUpdates();
+            updWatch.Start();
             Dispatcher.BeginInvoke(new Action(CheckDaily), DispatcherPriority.ApplicationIdle);
+            Dispatcher.BeginInvoke(new Action(CheckSteamUpdates), DispatcherPriority.ApplicationIdle);
             Link.Serve(LinkCommand);
             // What's new after an update (1.0 didn't remember the version, so someone with backups already is coming from 1.0)
             if (string.IsNullOrEmpty(S.LastSeenVersion)) S.LastSeenVersion = S.LastSig.Count > 0 ? "1.0" : Program.Version;
@@ -274,6 +280,7 @@ namespace HallowVault
                 c.Click += (s, e) => { set(c.IsChecked == true); S.Save(); }; sp.Children.Add(c); return c;
             };
             sw("Back up a game's saves when it closes", S.OnClose, v => S.OnClose = v);
+            sw("Back up a game right before Steam updates it", S.BeforeUpdate, v => S.BeforeUpdate = v);
             sw("Back up everything once a day", S.Daily, v => S.Daily = v);
             sw("Keep running in the tray when I close the window", S.TrayOnClose, v => S.TrayOnClose = v);
             sw("Start with Windows (in the tray)", StartsWithWindows(), v => SetStartWithWindows(v));
@@ -402,13 +409,14 @@ namespace HallowVault
                 {
                     Tuple<Game, string> job; lock (busy) { if (queue.Count == 0) { working = false; break; } job = queue.Dequeue(); }
                     var g2 = job.Item1; var force2 = job.Item2.StartsWith("!"); var why = job.Item2.TrimStart('!');
-                    string msg;
+                    string msg; bool wait = false;
                     try
                     {
                         var rs = Saves.Find(g2, steamUser, S.Extra.ContainsKey(g2.Id) ? S.Extra[g2.Id] : null);
                         var sig = Saves.Fingerprint(rs); string old; S.LastSig.TryGetValue(g2.Id, out old);
                         if (rs.Count == 0) msg = null;
                         else if (!force2 && sig == old && Backups.List(root, g2).Count > 0) msg = null;   // nothing changed
+                        else if (Settling(rs)) { msg = null; wait = true; }   // the game is still writing: try again in a bit
                         else
                         {
                             int skipped; var b = Backups.Make(root, g2, rs, why, out skipped);
@@ -417,12 +425,45 @@ namespace HallowVault
                         }
                     }
                     catch (Exception ex) { msg = "Couldn't back up " + g2.Name + ": " + ex.Message; }
-                    var m = msg; var gg = g2;
-                    Dispatcher.BeginInvoke(new Action(() => { history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, S.Extra.ContainsKey(gg.Id) ? S.Extra[gg.Id] : null); Fill(); if (m != null) Status(m); }));
+                    var m = msg; var gg = g2; var w2 = wait; var why2 = why;
+                    Dispatcher.BeginInvoke(new Action(() => { if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, S.Extra.ContainsKey(gg.Id) ? S.Extra[gg.Id] : null); Fill(); if (m != null) Status(m); }));
                 }
                 Dispatcher.BeginInvoke(new Action(() => { allBtn.IsEnabled = true; WriteStatus(); }));
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
             Status("Backing up " + g.Name + "...");
+        }
+
+        // v1.2: never back up while the game is writing - a save file written in the last 10 seconds means "not yet"
+        const int SettleSeconds = 10;
+        static bool Settling(List<SaveRoot> rs)
+        {
+            var age = (DateTime.UtcNow - Saves.NewestWrite(rs)).TotalSeconds;
+            return age < SettleSeconds && age > -60;   // (a clock far in the future is not "writing")
+        }
+        void Later(Game g, string why, bool force)
+        {
+            int n; settleTries.TryGetValue(g.Id, out n); n++;
+            if (n > 40) { settleTries.Remove(g.Id); Status(g.Name + "'s saves kept changing for 10 minutes, so it wasn't backed up this time - it will be next time."); return; }
+            settleTries[g.Id] = n;
+            Status("Waiting for " + g.Name + " to finish writing its saves...");
+            var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+            t.Tick += (o, e) => { t.Stop(); Enqueue(g, why, force); };
+            t.Start();
+        }
+
+        // v1.2: back up a Steam game right before it updates (its manifest says an update is waiting or starting)
+        void CheckSteamUpdates()
+        {
+            Dictionary<string, bool> st; try { st = Library.SteamUpdates(); } catch { return; }
+            foreach (var g in games)
+                foreach (var sg in new[] { g }.Concat(g.Alts).Where(x => x.Source == "steam"))
+                {
+                    var id = sg.Id.Substring(6); bool now, was;
+                    if (!st.TryGetValue(id, out now)) continue;
+                    var known = updState.TryGetValue(id, out was); updState[id] = now;
+                    if (!now || (known && was) || !S.BeforeUpdate || S.Off.Contains(g.Id) || !roots.ContainsKey(g.Id) || roots[g.Id].Count == 0) continue;
+                    Enqueue(g, "before a Steam update");   // only if something changed since the last backup
+                }
         }
 
         void CheckDaily()
@@ -437,13 +478,22 @@ namespace HallowVault
 
         void RestoreWindow(Game g)
         {
-            var hs = Backups.List(Root, g);
-            var w = new Window { Title = "Restore " + g.Name, Width = 560, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            BuildRestore(g).ShowDialog();
+        }
+        Window Dialog(string title, double width, Window owner)
+        {
+            var w = new Window { Title = title, Width = width, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, Owner = Snap.On ? null : owner, WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Background = (Brush)FindResource("Bg"), Foreground = (Brush)FindResource("Text"), FontFamily = new FontFamily("Segoe UI"), FontSize = 12.5, ShowInTaskbar = false };
             w.SourceInitialized += (s, e) => { int dark = 1; DwmSetWindowAttribute(new WindowInteropHelper(w).Handle, 20, ref dark, 4); };
+            return w;
+        }
+        Window BuildRestore(Game g)
+        {
+            var hs = Backups.List(Root, g);
+            var w = Dialog("Restore " + g.Name, 600, this);
             var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
             sp.Children.Add(new TextBlock { Text = "Restore " + g.Name, FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
-            sp.Children.Add(new TextBlock { Text = "Pick a version. Your current saves are backed up first, so you can always come back.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            sp.Children.Add(new TextBlock { Text = "Pick a version. Your current saves are backed up first, so you can always come back. Compare shows what would change.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
             var lst = new StackPanel();
             foreach (var b in hs)
             {
@@ -465,6 +515,9 @@ namespace HallowVault
                     catch (Exception ex) { MessageBox.Show(w, "Couldn't restore: " + ex.Message, "Restore"); }
                 };
                 DockPanel.SetDock(go, Dock.Right); r.Children.Add(go);
+                var cmp = new Button { Content = "Compare", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 6, 0), ToolTip = "See which files are different from your saves now (or another version)" };
+                cmp.Click += (s, e) => BuildCompare(g, hs, bb, w).ShowDialog();
+                DockPanel.SetDock(cmp, Dock.Right); r.Children.Add(cmp);
                 var t = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
                 t.Children.Add(new TextBlock { Text = bb.When.ToString("dddd d MMM yyyy, HH:mm"), FontWeight = FontWeights.SemiBold });
                 t.Children.Add(new TextBlock { Text = VaultSettings.Ago(bb.When) + "   ·   " + VaultSettings.Size(bb.Bytes) + "   ·   " + (bb.Reason ?? ""), Foreground = (Brush)FindResource("Muted"), FontSize = 11.5 });
@@ -472,7 +525,71 @@ namespace HallowVault
             }
             sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 420, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             var close = new Button { Content = "Cancel", Style = (Style)FindResource("Btn"), HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0), IsCancel = true };
-            sp.Children.Add(close); w.Content = sp; w.ShowDialog();
+            sp.Children.Add(close); w.Content = sp; return w;
+        }
+
+        // v1.2: what changed between two versions (or a version and your saves now) - nothing is changed here
+        Window BuildCompare(Game g, List<BackupInfo> hs, BackupInfo pick, Window owner)
+        {
+            var w = Dialog("Compare - " + g.Name, 680, owner);
+            var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
+            sp.Children.Add(new TextBlock { Text = "Compare " + g.Name + " versions", FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+            sp.Children.Add(new TextBlock { Text = "Files added, removed, bigger or smaller. Nothing is changed here.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            var pickRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+            var from = new ComboBox { Style = (Style)FindResource("Combo"), Width = 260 }; var to = new ComboBox { Style = (Style)FindResource("Combo"), Width = 260 };
+            Func<BackupInfo, ComboBoxItem> item = b => new ComboBoxItem { Content = b == null ? "Your saves now" : b.When.ToString("ddd d MMM, HH:mm") + (string.IsNullOrEmpty(b.Reason) ? "" : "  (" + b.Reason + ")"), Tag = b };
+            foreach (var b in hs) from.Items.Add(item(b));
+            to.Items.Add(item(null)); foreach (var b in hs) to.Items.Add(item(b));
+            pickRow.Children.Add(new TextBlock { Text = "From", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) }); pickRow.Children.Add(from);
+            pickRow.Children.Add(new TextBlock { Text = "to", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 8, 0) }); pickRow.Children.Add(to);
+            sp.Children.Add(pickRow);
+            var sum = new TextBlock { FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8), TextWrapping = TextWrapping.Wrap };
+            sp.Children.Add(sum);
+            var lst = new StackPanel();
+            sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 380, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            var rs = Saves.Find(g, steamUser, S.Extra.ContainsKey(g.Id) ? S.Extra[g.Id] : null);
+            var rootPaths = rs.Select(r => r.Path).Concat(hs.SelectMany(b => b.Roots ?? new List<string>())).Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(p => p.Length).ToList();
+            Func<string, string> shortName = p =>
+            {
+                var r0 = rootPaths.FirstOrDefault(x => p.Equals(x, StringComparison.OrdinalIgnoreCase) || p.StartsWith(x + "\\", StringComparison.OrdinalIgnoreCase));
+                return r0 == null ? p : System.IO.Path.GetFileName(r0) + (p.Length > r0.Length ? p.Substring(r0.Length) : "");
+            };
+            var colors = new Dictionary<string, string> { { "added", "#6ED28C" }, { "removed", "#F07070" }, { "bigger", "#F0BE5A" }, { "smaller", "#F0BE5A" }, { "changed", "#A98BE0" } };
+            Action refresh = () =>
+            {
+                lst.Children.Clear();
+                var a = from.SelectedItem as ComboBoxItem; var b = to.SelectedItem as ComboBoxItem; if (a == null || b == null) return;
+                try
+                {
+                    var older = Backups.Contents((BackupInfo)a.Tag);
+                    var newer = b.Tag == null ? Saves.Contents(rs) : Backups.Contents((BackupInfo)b.Tag);
+                    int same; var ch = Backups.Diff(older, newer, out same);
+                    Func<string, int> cnt = k => ch.Count(c => c.Kind == k);
+                    var parts = new List<string>();
+                    if (cnt("added") > 0) parts.Add(cnt("added") + " added"); if (cnt("removed") > 0) parts.Add(cnt("removed") + " removed");
+                    if (cnt("bigger") > 0) parts.Add(cnt("bigger") + " bigger"); if (cnt("smaller") > 0) parts.Add(cnt("smaller") + " smaller");
+                    if (cnt("changed") > 0) parts.Add(cnt("changed") + " saved again (same size)");
+                    sum.Text = ch.Count == 0 ? "No differences - " + same + (same == 1 ? " file is" : " files are") + " the same." : string.Join(", ", parts) + "   \u00B7   " + same + " the same";
+                    foreach (var c in ch.Take(400))
+                    {
+                        var d = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+                        var tag = new TextBlock { Text = c.Kind, Width = 70, Foreground = B(colors[c.Kind]), FontWeight = FontWeights.SemiBold }; DockPanel.SetDock(tag, Dock.Left); d.Children.Add(tag);
+                        var size = new TextBlock { Width = 150, TextAlignment = TextAlignment.Right, Foreground = (Brush)FindResource("Muted"),
+                            Text = c.Old < 0 ? VaultSettings.Size(c.New) : c.New < 0 ? VaultSettings.Size(c.Old) : c.Old == c.New ? VaultSettings.Size(c.New) : VaultSettings.Size(c.Old) + " \u2192 " + VaultSettings.Size(c.New) };
+                        DockPanel.SetDock(size, Dock.Right); d.Children.Add(size);
+                        d.Children.Add(new TextBlock { Text = shortName(c.Path), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = c.Path });
+                        lst.Children.Add(d);
+                    }
+                    if (ch.Count > 400) lst.Children.Add(new TextBlock { Text = "... and " + (ch.Count - 400) + " more", Foreground = (Brush)FindResource("Muted") });
+                }
+                catch (Exception ex) { sum.Text = "Couldn't compare: " + ex.Message; }
+            };
+            from.SelectedItem = from.Items.Cast<ComboBoxItem>().FirstOrDefault(i => i.Tag == pick) ?? (from.Items.Count > 0 ? from.Items[0] : null);
+            to.SelectedIndex = 0;
+            from.SelectionChanged += (s, e) => refresh(); to.SelectionChanged += (s, e) => refresh();
+            refresh();
+            var close = new Button { Content = "Close", Style = (Style)FindResource("Btn"), HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0), IsCancel = true };
+            sp.Children.Add(close); w.Content = sp; return w;
         }
 
         void Status(string m) { status.Text = m; }
@@ -504,6 +621,13 @@ namespace HallowVault
         {
             Snap.Save(this, System.IO.Path.Combine(dir, "main.png"), 1060, 740);
             settingsPanel.Visibility = Visibility.Visible; Snap.Save(this, System.IO.Path.Combine(dir, "settings.png"), 1060, 740);
+            // the restore and compare windows for the first game with two or more backups (read-only)
+            var g = games.FirstOrDefault(x => history.ContainsKey(x.Id) && history[x.Id].Count >= 2);
+            if (g != null)
+            {
+                var rw = BuildRestore(g); Snap.Save(rw, System.IO.Path.Combine(dir, "restore.png"), rw.Width, 0);
+                var hs = history[g.Id]; var cw = BuildCompare(g, hs, hs[hs.Count - 1], this); Snap.Save(cw, System.IO.Path.Combine(dir, "compare.png"), cw.Width, 0);
+            }
         }
     }
 }

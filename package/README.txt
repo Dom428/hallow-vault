@@ -6,6 +6,11 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.2
+- Restore > Compare: see which files were added, removed, got bigger or smaller before you restore.
+- Backs up a Steam game right before it updates (Settings), and never while a game is still writing
+  its saves (it waits until they've been quiet for 10 seconds).
+
 WHAT'S NEW IN 1.1
 - Fixed: Hallow Vault could close itself when it saved its settings (after a backup).
 - Delta Force's settings and saves are found and backed up now.
@@ -19,6 +24,7 @@ WHAT IT DOES
 - Backs up a game when it closes (only if something changed), and everything once a day.
 - Keeps the last 10 backups of each game (5 to 50 in Settings).
 - Restore: pick any version and it's put back. Your current saves are backed up first.
+  Compare shows which files were added, removed, got bigger or smaller first.
 - Backups are ordinary .zip files. By default they go to a second drive if you have one -
   a network folder (like your server) is even safer: Settings > Change.
 - Logs, caches, crash dumps and secrets (like app keys) are left out.

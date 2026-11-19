@@ -20,7 +20,7 @@ namespace HallowVault
         static readonly Dictionary<string, string> Labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
             { "Back up everything", "floppy-disk" }, { "Back up", "floppy-disk" }, { "Restore", "clock-rotate-left" }, { "Restore this", "clock-rotate-left" },
             { "Open folder", "folder-open" }, { "Open the vault", "folder-open" }, { "Add folder", "plus" }, { "Turn off", "power-off" }, { "Turn on", "power-off" },
-            { "Refresh", "arrows-rotate" }, { "Settings", "gear" }, { "Change...", "pen" }, { "Cancel", "xmark" }, { "x", "xmark" }, { "OK", "check" },
+            { "Refresh", "arrows-rotate" }, { "Settings", "gear" }, { "Change...", "pen" }, { "Cancel", "xmark" }, { "x", "xmark" }, { "OK", "check" }, { "Compare", "magnifying-glass" }, { "Close", "xmark" }, { "Got it", "check" },
         };
         static readonly string[][] Prefixes = { };
         public static string ForLabel(string label)

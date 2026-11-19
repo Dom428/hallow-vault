@@ -107,6 +107,26 @@ namespace HallowVault
                 }
             }
         }
+        // v1.2 (Vault): which installed Steam games have an update waiting or running, by app id.
+        // appmanifest StateFlags: 2 = update required (queued), 256 = update running, 512 = paused, 1024 = update started;
+        // a download that hasn't finished (BytesDownloaded < BytesToDownload) counts too.
+        public static Dictionary<string, bool> SteamUpdates()
+        {
+            var res = new Dictionary<string, bool>();
+            foreach (var lib in SteamLibraries())
+            {
+                var apps = Path.Combine(lib, "steamapps"); if (!Directory.Exists(apps)) continue;
+                foreach (var acf in Directory.GetFiles(apps, "appmanifest_*.acf"))
+                {
+                    string t; try { t = File.ReadAllText(acf, Encoding.UTF8); } catch { continue; }
+                    var id = Field(t, "appid"); if (id == null) continue;
+                    int flags; int.TryParse(Field(t, "StateFlags") ?? "4", out flags);
+                    long todo, done; long.TryParse(Field(t, "BytesToDownload") ?? "0", out todo); long.TryParse(Field(t, "BytesDownloaded") ?? "0", out done);
+                    res[id] = (flags & (2 | 256 | 512 | 1024)) != 0 || (todo > 0 && done < todo);
+                }
+            }
+            return res;
+        }
         static string Field(string acf, string key) { var m = Regex.Match(acf, "\"" + key + "\"\\s+\"([^\"]*)\"", RegexOptions.IgnoreCase); return m.Success ? m.Groups[1].Value : null; }
         static string Clean(string n) { return n.Replace("\u00AE", "").Replace("\u2122", "").Trim(); }   // drop (R) and TM
 

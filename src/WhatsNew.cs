@@ -13,6 +13,7 @@ namespace HallowVault
     {
         // Newest first. One or two short lines per version.
         public static readonly Tuple<string, string[]>[] Notes = {
+            Tuple.Create("1.2", new[] { "Restore > Compare: see which files were added, removed, got bigger or smaller before you restore", "Backs up a Steam game right before it updates, and never while a game is still writing its saves" }),
             Tuple.Create("1.1", new[] { "Finds Delta Force's settings and saves", "Hallow Hub and Hallow Remote can see your backups and start one (Hallow family link)" }),
         };
 
