@@ -20,10 +20,6 @@ WHAT'S NEW IN 1.9
 
 WHAT'S NEW IN 1.8
 - Updates itself from GitHub - it asks first (Settings > Check for updates).
-- Settings: back up every few hours, compression, and the Backup log. Right-click a game to pick
-  which files to back up.
-- The second copy shows whether it's up to date or behind, and catches up by itself.
-- Knows where 19,000+ games keep their saves (online save database, Settings; checked weekly).
 - Games that keep settings in the registry (many Unity games) are backed up too, and more save
   folders are found for games Vault didn't know.
 
