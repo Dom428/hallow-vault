@@ -13,6 +13,13 @@
 
 ## Next
 
+### 1.6 - Hallow accent and crash reports
+- Use the Hallow accent colour picked in Hallow Toolkit (live, on by default)
+- Crash reports kept on this PC, a notice after a crash, lastCrash in status
+
+### 1.7 - Pins, save alarms and moving PCs
+- Save alarm: saves that suddenly shrink or vanish aren't backed up over - restore the last good one
+- Move to a new PC: export the newest (and pinned) versions, import them on the other PC
+
 ### Later
 - Fixes from real use: check the game-closed backup after real game sessions
-- Pin a version so it's never pruned (before a big boss, a finished run)
