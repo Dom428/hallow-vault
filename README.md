@@ -21,6 +21,7 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - **Schedules and compression:** also back up every 1-12 hours; compression Smallest / Faster / None.
 - **Files to back up per game** (right-click a game): include and leave-out patterns like `*.sav` or `Screenshots\*`, with a live count.
 - **Backup log** (Settings): every backup, skip, refusal, failure, restore and import with its time, in `%APPDATA%\HallowVault\backup-log.txt`.
+- **Second copy you can trust:** Settings shows whether it's up to date, behind or out of reach (USB unplugged), it catches up by itself (on start, every 10 minutes, after backups), and it spots sync conflict copies a cloud app made (`<backup> (1).zip`, `<backup>-PCNAME.zip`, `(conflicted copy)`). `status` has `secondCopy`.
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.
 

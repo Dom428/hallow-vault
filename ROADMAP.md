@@ -14,12 +14,9 @@
 | **1.7** | Pin a version (never pruned, kept by size limits); save alarm (shrunk / vanished saves aren't backed up over, notify + Restore); move to a new PC (export newest + pinned with a manifest, import with path re-mapping and a safety backup) |
 | **1.8** | Updates itself from GitHub (asks first, SHA-256 checked); registry saves (HKCU\Software\<developer>\<game>) as .reg in the backup, restored only into that key; Documents\<game> and developer-named AppData folders for games nothing else finds |
 | **1.9** | Back up every 1-12 hours; compression level; include / leave-out patterns per game; backup log |
+| **1.10** | Second copy status (up to date / behind / unreachable), automatic catch-up, cloud sync conflict copies spotted |
 
 ## Next
-
-### 1.10 - Second copy you can trust
-- The second copy shows when it's behind (drive missing, copies not made yet) and catches up by itself
-- Notices cloud sync conflict copies (OneDrive / Dropbox / Google Drive) in the second copy
 
 ### Gaps vs Ludusavi
 Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = can be built and tested on this PC without the user.

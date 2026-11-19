@@ -451,6 +451,34 @@ namespace HallowVault
             }
             return copied;
         }
+        // ---- v1.10: is the second copy keeping up? Behind = vault backups the copy doesn't have; conflicts = copies a cloud app made
+        // when two versions of a file met ("<backup> (1).zip", "<backup>-DESKTOP-PC.zip", "<backup> (conflicted copy ...).zip", "pins (1).txt").
+        public class CopyInfo { public bool Reachable; public int Behind; public List<string> Conflicts = new List<string>(); public DateTime? Last; public string Error; }
+        static readonly System.Text.RegularExpressions.Regex ConflictName = new System.Text.RegularExpressions.Regex(@"^(\d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d.+\.zip|pins.+\.txt)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        public static CopyInfo CopyState(string root, string copyRoot)
+        {
+            var c = new CopyInfo();
+            try
+            {
+                var drive = System.IO.Path.GetPathRoot(System.IO.Path.GetFullPath(copyRoot));
+                if (!Directory.Exists(drive)) { c.Error = drive.TrimEnd('\\') + " isn't there (unplugged?)"; return c; }
+                c.Reachable = true;
+                foreach (var dir in Directory.Exists(root) ? Directory.GetDirectories(root) : new string[0])
+                {
+                    var have = Zips(dir); if (have.Count == 0) continue;
+                    var dst = System.IO.Path.Combine(copyRoot, System.IO.Path.GetFileName(dir));
+                    c.Behind += have.Count(f => !File.Exists(System.IO.Path.Combine(dst, f.Name)));
+                }
+                if (Directory.Exists(copyRoot))
+                    foreach (var dst in Directory.GetDirectories(copyRoot))
+                    {
+                        foreach (var f in Directory.GetFiles(dst)) if (ConflictName.IsMatch(System.IO.Path.GetFileName(f)) && !System.IO.Path.GetFileName(f).Equals(PinsFile, StringComparison.OrdinalIgnoreCase)) c.Conflicts.Add(f);
+                        var z = Zips(dst).FirstOrDefault(); if (z != null && (c.Last == null || z.LastWriteTime > c.Last)) c.Last = z.LastWriteTime;
+                    }
+            }
+            catch (Exception ex) { c.Error = ex.Message; c.Reachable = false; }
+            return c;
+        }
         // a copy folder must be somewhere else than the vault (not the same folder, not inside it, not around it)
         public static bool Overlaps(string a, string b)
         {

@@ -6,6 +6,10 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.10
+- The second copy shows whether it's up to date, behind or out of reach, and catches up by itself.
+- Spots sync conflict copies your cloud app made in the second copy.
+
 WHAT'S NEW IN 1.9
 - Settings: also back up every few hours, compression, and the Backup log.
 - Right-click a game > Files to back up: include or leave out files (like *.sav or Screenshots\*).
@@ -14,6 +18,7 @@ WHAT'S NEW IN 1.8
 - Updates itself from GitHub - it asks first (Settings > Check for updates).
 - Settings: back up every few hours, compression, and the Backup log. Right-click a game to pick
   which files to back up.
+- The second copy shows whether it's up to date or behind, and catches up by itself.
 - Games that keep settings in the registry (many Unity games) are backed up too, and more save
   folders are found for games Vault didn't know.
 
@@ -72,6 +77,7 @@ WHAT IT DOES
 - Updates itself from GitHub - it asks first (Settings > Check for updates).
 - Settings: back up every few hours, compression, and the Backup log. Right-click a game to pick
   which files to back up.
+- The second copy shows whether it's up to date or behind, and catches up by itself.
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.
