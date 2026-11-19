@@ -12,6 +12,10 @@
 
 ## Next
 
+### 1.5 - One Hallow icon
+- Hallow Hub hosts the tray menu for the whole family: Vault's actions (Back up everything, Restore, Open the vault folder) in Hub's icon, Vault's own icon hidden while Hub hosts it
+- Setting: Use the Hallow icon (on by default); messages go through Hub's icon while Vault's is hidden
+
 ### Later
 - Fixes from real use: check the game-closed backup after real game sessions
 - Pin a version so it's never pruned (before a big boss, a finished run)
