@@ -18,9 +18,14 @@
 
 ## Next
 
+### 1.11 - Saves for 19,000 games
+- Ludusavi's save database (built from PCGamingWiki), downloaded on first run and re-checked weekly; Settings switch, on by default
+- Its save and settings folders and registry keys go first for every known game; Vault's own finders stay as fallbacks
+- Credit for Ludusavi's manifest (MIT) and PCGamingWiki (CC BY-NC-SA 3.0)
+
 ### Gaps vs Ludusavi
 Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = can be built and tested on this PC without the user.
-- **Game coverage (the big one):** Ludusavi knows save locations for ~19,000 games from its manifest, built from PCGamingWiki. **Needs the user** - Vault would have to download the manifest (see the notes below); 1.8 narrows the gap with better guessing.
+- **Game coverage (the big one):** Ludusavi knows save locations for ~19,000 games from its manifest, built from PCGamingWiki. **Approved by the user - 1.11** uses the manifest.
 - **Registry saves:** buildable here - 1.8.
 - **Scheduled backups:** buildable here - 1.9 (Ludusavi leaves scheduling to Task Scheduler; GameSave Manager makes scheduled tasks).
 - **Compression choice:** buildable here - 1.9 (zip level; Ludusavi also offers other zip methods, which Windows' built-in zip can't make).
