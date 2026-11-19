@@ -8,12 +8,9 @@
 | **1.1** | Delta Force's saves (kept inside the game folder) found; Hallow family link: pipe `HallowFamily.Vault.<user>` (ping, status, backup), `--cmd`, `status.json`; What's new after an update |
 | **1.2** | Compare two versions (or a version and your saves now) before restoring; back up when Steam's app manifest shows an update waiting or starting; wait until no save file changed for 10 s |
 | **1.3** | Second copy to a folder you pick (cloud-synced folder or USB drive), mirrored after each backup and pruned in step; size limits per game and for the whole vault (oldest first, never a game's newest) |
+| **1.4** | Hallow Hub's game page shows Saves (last backup, Back up now, Restore); Hallow Remote: Back up now from the phone - both through the family link |
 
 ## Next
-
-### 1.4 - Hallow family
-- Hallow Hub's game page shows Saves (last backup, Back up now, Restore)
-- Hallow Remote: Back up now from the phone
 
 ### Later
 - Fixes from real use: check the game-closed backup after real game sessions

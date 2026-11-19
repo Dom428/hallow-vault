@@ -8,7 +8,7 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - Backups are plain **.zip** files, on a second drive by default (or any folder / network share you pick).
 - **Second copy** to another folder you pick - a OneDrive, Google Drive or Dropbox folder, or a USB drive (no accounts inside Vault). Every new backup is copied there and old ones go in step. **Size limits** per game and for the whole vault: oldest versions go first, never a game's newest.
 - Leaves out logs, caches, crash dumps and secrets.
-- **Hallow family link:** Hallow Hub and Hallow Remote see your backups and can start one. Named pipe `HallowFamily.Vault.<user>` (`ping`, `status`, `backup <game>`, `backup all`, `restore <game>` opens the restore window; current user only), `HallowVault.exe --cmd "backup all"` for scripts and Stream Deck, and `%APPDATA%\HallowVault\status.json`.
+- **Hallow family:** Hallow Hub's game pages show each game's Saves (last backup, Back up now, Restore) and Hallow Remote has Back up now on your phone. The link: Named pipe `HallowFamily.Vault.<user>` (`ping`, `status`, `backup <game>`, `backup all`, `restore <game>` opens the restore window; current user only), `HallowVault.exe --cmd "backup all"` for scripts and Stream Deck, and `%APPDATA%\HallowVault\status.json`.
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.
 
