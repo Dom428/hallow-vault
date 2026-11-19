@@ -7,6 +7,7 @@ HOW TO INSTALL
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
 WHAT'S NEW IN 1.1
+- Fixed: Hallow Vault could close itself when it saved its settings (after a backup).
 - Delta Force's settings and saves are found and backed up now.
 - Hallow Hub and Hallow Remote can see your backups and start one (Hallow family link).
   For scripts and Stream Deck: HallowVault.exe --cmd "backup all" (or "backup Deadlock").

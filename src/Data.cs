@@ -56,7 +56,7 @@ namespace HallowVault
             catch { try { File.Copy(FilePath, FilePath + ".broken", true); } catch { } }
             return new VaultSettings();
         }
-        readonly object saveLock = new object();
+        static readonly object saveLock = new object();   // static: the deserializer skips field initializers, so an instance lock would be null
         public void Save()
         {
             if (Frozen) return;
