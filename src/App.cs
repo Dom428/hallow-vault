@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.10.0.0")]
-[assembly: AssemblyFileVersion("1.10.0.0")]
+[assembly: AssemblyVersion("1.11.0.0")]
+[assembly: AssemblyFileVersion("1.11.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.10";
+        public const string Version = "1.11";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -88,6 +88,9 @@ namespace HallowVault
             // v1.9: your include / leave-out patterns and the compression level
             Saves.Filters = id => { List<string> inc, exc; S.Include.TryGetValue(id, out inc); S.Exclude.TryGetValue(id, out exc); return inc == null && exc == null ? null : Tuple.Create((inc ?? new List<string>()).ToArray(), (exc ?? new List<string>()).ToArray()); };
             ApplyCompression();
+            // v1.11: the online save database (loaded from its cached index - fast)
+            Saves.ManifestFor = g => S.UseManifest ? Manifest.For(g) : null; Saves.ManifestConfig = S.ManifestConfig;
+            if (S.UseManifest) { var lsw = Stopwatch.StartNew(); if (Manifest.Load()) manifestLoadMs = lsw.ElapsedMilliseconds; }
             Title = "Hallow Vault"; Width = 1060; Height = 740; MinWidth = 880; MinHeight = 560;
             Background = (Brush)FindResource("Bg"); Foreground = (Brush)FindResource("Text"); FontFamily = new FontFamily("Segoe UI"); FontSize = 12.5;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -130,6 +133,8 @@ namespace HallowVault
             sched = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };   // v1.9: every N hours
             sched.Tick += (s, e) => CheckSchedule();
             sched.Start();
+            hourly.Tick += (s, e) => CheckManifest(false);   // v1.11: weekly re-check (asked every half hour, acts once a week)
+            Dispatcher.BeginInvoke(new Action(() => CheckManifest(false)), DispatcherPriority.ApplicationIdle);
             copyWatch = new DispatcherTimer { Interval = TimeSpan.FromMinutes(10) }; copyWatch.Tick += (s, e) => CheckCopy(); copyWatch.Start();   // v1.10
             Dispatcher.BeginInvoke(new Action(CheckCopy), DispatcherPriority.ApplicationIdle);
             Dispatcher.BeginInvoke(new Action(CheckDaily), DispatcherPriority.ApplicationIdle);
@@ -179,6 +184,36 @@ namespace HallowVault
             ok.Click += (s, e) => w.Close();
             row.Children.Add(det); row.Children.Add(fol); row.Children.Add(ok); sp.Children.Add(row);
             w.Content = sp; return w;
+        }
+
+        // ================================================================ v1.11: the online save database
+        TextBlock manState; long manifestLoadMs = -1; bool manChecking;
+        void ShowManifestState()
+        {
+            if (manState == null) return;
+            if (!S.UseManifest) { manState.Text = "Off - Vault uses only its own detection."; manState.Foreground = (Brush)FindResource("Muted"); return; }
+            if (manChecking && !Manifest.Loaded) { manState.Text = "Downloading the save database..."; manState.Foreground = B("#F0BE5A"); return; }
+            if (!Manifest.Loaded) { manState.Text = "Not downloaded yet - Vault uses its own detection until it is."; manState.Foreground = B("#F0BE5A"); return; }
+            manState.Text = Manifest.Count.ToString("N0") + " games  \u00B7  updated " + VaultSettings.Ago(Manifest.Updated) + (manChecking ? "  \u00B7  checking for a newer one..." : ""); manState.Foreground = B("#6ED28C");
+        }
+        // first run: download; then once a week: re-download only when GitHub's sha changed. A failure keeps the old copy.
+        void CheckManifest(bool now)
+        {
+            if (Snap.On || !S.UseManifest || manChecking) return;
+            if (!now && Manifest.Loaded && !Manifest.DueForCheck()) return;
+            manChecking = true; ShowManifestState();
+            new Thread(() =>
+            {
+                bool changed; var msg = Manifest.Refresh(out changed);
+                var sw2 = Stopwatch.StartNew(); var loaded = changed ? Manifest.Load() : Manifest.Loaded; var ms = sw2.ElapsedMilliseconds;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    manChecking = false;
+                    if (msg != null) { Log.Add("Save database", msg + (changed ? " (index loaded in " + ms + " ms)" : "")); Status(msg); }
+                    if (changed || (now && loaded)) Rescan();
+                    ShowManifestState();
+                }));
+            }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
         }
 
         // ================================================================ v1.9: schedule, compression, filters, log
@@ -632,7 +667,12 @@ namespace HallowVault
             sw("Start with Windows (in the tray)", StartsWithWindows(), v => SetStartWithWindows(v));
             sw("Use the Hallow icon (Hallow Hub's tray menu, instead of a Vault icon)", S.UseHallowIcon, v => { S.UseHallowIcon = v; CheckTrayHost(); });
             sw("Use the Hallow accent colour (picked in Hallow Toolkit)", S.UseHallowAccent, v => { S.UseHallowAccent = v; Dispatcher.BeginInvoke(new Action(ApplyAccent)); });
-            sp.Children.Add(new TextBlock { Text = "Backups are ordinary .zip files you can open anywhere. Logs, caches and crash dumps are left out, and so are secrets like app keys.",
+            // v1.11: the online save database
+            sw("Online save database (where 19,000+ games keep their saves)", S.UseManifest, v => { S.UseManifest = v; if (v && !Manifest.Loaded) CheckManifest(true); else Rescan(); ShowManifestState(); });
+            sp.Children.Add(new TextBlock { Text = "Ludusavi's save database, built from PCGamingWiki. Vault downloads it from GitHub and checks once a week for a newer one - nothing about your PC is sent. Vault's own detection still adds anything it misses.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(46, -2, 0, 4) });
+            manState = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(46, 0, 0, 6) }; sp.Children.Add(manState); ShowManifestState();
+            sw("Also back up settings files the database lists (not only saves)", S.ManifestConfig, v => { S.ManifestConfig = v; Saves.ManifestConfig = v; Rescan(); });
+            sp.Children.Add(new TextBlock { Text = "Backups are ordinary .zip files you can open anywhere. Logs, caches and crash dumps are left out, and so are secrets like app keys.\n\nSave database: Ludusavi's manifest by Matthew T. Kennerly (MIT, github.com/mtkennerly/ludusavi-manifest), compiled from PCGamingWiki (CC BY-NC-SA 3.0, pcgamingwiki.com).",
                 Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
                         var verRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
             var chk = new Button { Content = "Check for updates", Style = (Style)FindResource("Btn") }; chk.Click += (s, e) => CheckForUpdate(true);
@@ -1115,6 +1155,7 @@ namespace HallowVault
             if (!string.IsNullOrEmpty(S.CopyDir)) { copyState = Backups.CopyState(Root, S.CopyDir); ShowCopyState(); Fill(); }
             Snap.Save(this, System.IO.Path.Combine(dir, "main.png"), 1060, 740);
             settingsPanel.Visibility = Visibility.Visible; Snap.Save(this, System.IO.Path.Combine(dir, "settings.png"), 1060, 740);
+            var ssv = settingsPanel.Child as ScrollViewer; if (ssv != null) { ssv.ScrollToEnd(); ssv.UpdateLayout(); Snap.Save(this, System.IO.Path.Combine(dir, "settings-end.png"), 1060, 740); ssv.ScrollToEnd(); ssv.UpdateLayout(); Snap.Save(this, System.IO.Path.Combine(dir, "settings-end.png"), 1060, 740); }
             var cr = Crash.Reports().FirstOrDefault(); if (cr != null) { var cw0 = BuildCrash(cr, this); Snap.Save(cw0, System.IO.Path.Combine(dir, "crash.png"), cw0.Width, 0); }
             var fg = games.FirstOrDefault(x => roots.ContainsKey(x.Id) && roots[x.Id].Count > 0 && x.Source == "hallow") ?? games.FirstOrDefault(x => roots.ContainsKey(x.Id) && roots[x.Id].Count > 0);
             if (fg != null) { var fw = BuildFilters(fg, this); Snap.Save(fw, System.IO.Path.Combine(dir, "filters.png"), fw.Width, 0); }

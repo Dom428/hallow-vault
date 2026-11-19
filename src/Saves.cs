@@ -80,6 +80,27 @@ namespace HallowVault
                 add(System.IO.Path.Combine(Roaming, "HallowHub"), "Hallow Hub");
                 add(System.IO.Path.Combine(Roaming, "HallowVault"), "Hallow Vault");
             }
+            // v1.11: the online save database (Ludusavi's manifest) goes first for games it knows
+            var dirs0 = new[] { g }.Concat(g.Alts).Select(x => x.InstallDir).Where(d => !string.IsNullOrEmpty(d) && Directory.Exists(d)).ToList();
+            var mg = g.Source == "hallow" || ManifestFor == null ? null : ManifestFor(g);
+            if (mg != null)
+            {
+                var steamRoot = Library.SteamPath(); var accts = new List<string>();
+                try { if (steamRoot != null && Directory.Exists(System.IO.Path.Combine(steamRoot, "userdata"))) accts = Directory.GetDirectories(System.IO.Path.Combine(steamRoot, "userdata")).Select(System.IO.Path.GetFileName).Where(n => n.All(char.IsDigit)).ToList(); } catch { }
+                var bases = dirs0.Count > 0 ? dirs0 : new List<string> { null };
+                foreach (var b in bases)
+                {
+                    var sg = new[] { g }.Concat(g.Alts).FirstOrDefault(x => x.Source == "steam");
+                    var w = new Manifest.Where { Base = b, GameDir = b == null ? null : System.IO.Path.GetFileName(b.TrimEnd('\\')), SteamId = sg == null ? null : sg.Id.Substring(6), SteamAccounts = accts };
+                    if (steamRoot != null) w.Roots.Add(steamRoot);
+                    if (b != null) { var parent = System.IO.Path.GetDirectoryName(b.TrimEnd('\\')); var lib = parent != null && System.IO.Path.GetFileName(parent).Equals("common", StringComparison.OrdinalIgnoreCase) ? System.IO.Path.GetDirectoryName(System.IO.Path.GetDirectoryName(parent)) : parent; if (lib != null) w.Roots.Add(lib); }
+                    foreach (var f in mg.Files.Where(x => ManifestConfig || !x.Item1))
+                        foreach (var hit in Manifest.Expand(f.Item2, w)) if (!TooBroad(hit, dirs0, steamRoot)) add(hit, "Save database");
+                }
+                foreach (var r in mg.Registry.Where(x => ManifestConfig || !x.Item1)) add(r.Item2, "Save database");
+            }
+            // Vault's own finders still run after it: on this PC the database lists fewer files than they find for several games
+            // (Overwatch's per-account settings, Delta Force's SaveGames), so nothing that was backed up before is dropped.
             // Steam keeps cloud saves and per-game settings under userdata\<account>\<appid>
             // (every Steam account on this PC that has a folder for the game - the signed-in one first)
             var accounts = new List<string>();
@@ -148,6 +169,26 @@ namespace HallowVault
             foreach (var r in list) Measure(r);
             list.RemoveAll(r => (r.Kind == "Developer folder" || r.Kind == "Documents") && r.Bytes > (200L << 20));   // a big guessed folder is a cache, not saves
             return list;
+        }
+
+        // ---- v1.11: the save database
+        public static Func<Game, ManGame> ManifestFor;
+        public static bool ManifestConfig = true;   // also settings files (tagged "config"), not only saves
+        // a database path that would back up far too much: a whole user / system / Steam folder, or the game's own install folder (or above it)
+        static bool TooBroad(string p, List<string> installDirs, string steamRoot)
+        {
+            var norm = p.TrimEnd('\\') + "\\";
+            Func<string, bool> same = x => !string.IsNullOrEmpty(x) && string.Equals(x.TrimEnd('\\') + "\\", norm, StringComparison.OrdinalIgnoreCase);
+            Func<string, bool> above = x => !string.IsNullOrEmpty(x) && (x.TrimEnd('\\') + "\\").StartsWith(norm, StringComparison.OrdinalIgnoreCase);
+            if (System.IO.Path.GetPathRoot(p).TrimEnd('\\').Equals(p.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return true;
+            if (installDirs.Any(above)) return true;
+            Func<Environment.SpecialFolder, string> sf = Environment.GetFolderPath;
+            var wide = new[] { sf(Environment.SpecialFolder.UserProfile), Docs, Roaming, Local, LocalLow, sf(Environment.SpecialFolder.CommonApplicationData), sf(Environment.SpecialFolder.Windows),
+                Environment.GetEnvironmentVariable("PUBLIC"), System.IO.Path.GetDirectoryName(sf(Environment.SpecialFolder.UserProfile)), steamRoot,
+                steamRoot == null ? null : System.IO.Path.Combine(steamRoot, "userdata"), System.IO.Path.Combine(Docs, "My Games"), System.IO.Path.Combine(sf(Environment.SpecialFolder.UserProfile), "Saved Games") };
+            if (wide.Any(x => same(x) || above(x))) return true;
+            if (steamRoot != null && System.Text.RegularExpressions.Regex.IsMatch(norm, "^" + System.Text.RegularExpressions.Regex.Escape(steamRoot.TrimEnd('\\') + @"\userdata\") + @"\d+\\$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return true;   // a whole Steam account
+            return false;
         }
 
         // ---- v1.9: include / leave-out patterns per game ("*.sav", "Screenshots\*", "slot?.dat"; a pattern with no "\" matches the file name anywhere)

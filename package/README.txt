@@ -6,6 +6,10 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.11
+- Knows where 19,000+ games keep their saves: Ludusavi's save database (from PCGamingWiki),
+  downloaded from GitHub and checked weekly. Settings > Online save database.
+
 WHAT'S NEW IN 1.10
 - The second copy shows whether it's up to date, behind or out of reach, and catches up by itself.
 - Spots sync conflict copies your cloud app made in the second copy.
@@ -19,6 +23,7 @@ WHAT'S NEW IN 1.8
 - Settings: back up every few hours, compression, and the Backup log. Right-click a game to pick
   which files to back up.
 - The second copy shows whether it's up to date or behind, and catches up by itself.
+- Knows where 19,000+ games keep their saves (online save database, Settings; checked weekly).
 - Games that keep settings in the registry (many Unity games) are backed up too, and more save
   folders are found for games Vault didn't know.
 
@@ -78,9 +83,12 @@ WHAT IT DOES
 - Settings: back up every few hours, compression, and the Backup log. Right-click a game to pick
   which files to back up.
 - The second copy shows whether it's up to date or behind, and catches up by itself.
+- Knows where 19,000+ games keep their saves (online save database, Settings; checked weekly).
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.
 
 CREDITS
+Save database: Ludusavi manifest by Matthew T. Kennerly (MIT, https://github.com/mtkennerly/ludusavi-manifest),
+compiled from PCGamingWiki (CC BY-NC-SA 3.0, https://www.pcgamingwiki.com).
 Icons: Font Awesome Free 7.3.1 by Fonticons, Inc. (https://fontawesome.com), licensed CC BY 4.0 - see FontAwesome-LICENSE.txt.

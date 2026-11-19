@@ -41,6 +41,7 @@ namespace HallowVault
         [DataMember] public bool UseHallowAccent = true;                // v1.6: the family accent colour (Hallow Toolkit)
         [DataMember] public string LastCrashShown = "";                 // v1.6: the crash report we already told you about
         [DataMember] public Dictionary<string, string> Alarms = new Dictionary<string, string>();
+        [DataMember] public bool UseManifest = true, ManifestConfig = true;   // v1.11: the online save database, and its settings files too
         [DataMember] public int EveryHours = 0;                         // v1.9: also back up every N hours (0 = off)
         [DataMember] public string LastScheduled = "";
         [DataMember] public string Compression = "best";                // v1.9: best / fast / none
@@ -54,7 +55,7 @@ namespace HallowVault
         [OnDeserializing] void D(StreamingContext c)
         {
             VaultDir = ""; Keep = 10; OnClose = true; Daily = true; LastDaily = ""; TrayOnClose = true; Extra = new Dictionary<string, List<string>>(); Off = new List<string>();
-            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0; UseHallowIcon = true; UseHallowAccent = true; LastCrashShown = ""; Alarms = new Dictionary<string, string>(); EveryHours = 0; LastScheduled = ""; Compression = "best"; Include = new Dictionary<string, List<string>>(); Exclude = new Dictionary<string, List<string>>();
+            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0; UseHallowIcon = true; UseHallowAccent = true; LastCrashShown = ""; Alarms = new Dictionary<string, string>(); UseManifest = true; ManifestConfig = true; EveryHours = 0; LastScheduled = ""; Compression = "best"; Include = new Dictionary<string, List<string>>(); Exclude = new Dictionary<string, List<string>>();
         }
 
         public static string Dir { get { return Link.TestDir != null ? Path.Combine(Link.TestDir, "HallowVault") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HallowVault"); } }

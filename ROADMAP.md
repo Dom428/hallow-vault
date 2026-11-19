@@ -15,13 +15,9 @@
 | **1.8** | Updates itself from GitHub (asks first, SHA-256 checked); registry saves (HKCU\Software\<developer>\<game>) as .reg in the backup, restored only into that key; Documents\<game> and developer-named AppData folders for games nothing else finds |
 | **1.9** | Back up every 1-12 hours; compression level; include / leave-out patterns per game; backup log |
 | **1.10** | Second copy status (up to date / behind / unreachable), automatic catch-up, cloud sync conflict copies spotted |
+| **1.11** | Online save database: Ludusavi's manifest (from PCGamingWiki) downloaded and re-checked weekly, parsed by a small YAML reader into a cached index; its paths and HKCU keys go first, Vault's finders add the rest |
 
 ## Next
-
-### 1.11 - Saves for 19,000 games
-- Ludusavi's save database (built from PCGamingWiki), downloaded on first run and re-checked weekly; Settings switch, on by default
-- Its save and settings folders and registry keys go first for every known game; Vault's own finders stay as fallbacks
-- Credit for Ludusavi's manifest (MIT) and PCGamingWiki (CC BY-NC-SA 3.0)
 
 ### Gaps vs Ludusavi
 Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = can be built and tested on this PC without the user.
