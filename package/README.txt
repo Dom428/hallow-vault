@@ -6,6 +6,10 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.5
+- One Hallow icon: with Hallow Hub running, Vault lives in Hub's tray menu (Back up everything,
+  Restore, Open the vault folder) instead of its own icon. Settings > Use the Hallow icon.
+
 WHAT'S NEW IN 1.4
 - Hallow Hub's game pages show each game's Saves: last backup, Back up now, Restore.
 - Hallow Remote: Back up now from your phone.
@@ -40,6 +44,7 @@ WHAT IT DOES
   USB drive too. Size limits per game and for the whole vault (oldest versions go first).
 - Logs, caches, crash dumps and secrets (like app keys) are left out.
 - Works with Hallow Hub (each game's Saves on its page) and Hallow Remote (Back up now from your phone).
+- With Hallow Hub running, Vault lives in Hub's tray icon instead of its own (Settings > Use the Hallow icon).
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.

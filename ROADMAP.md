@@ -9,12 +9,9 @@
 | **1.2** | Compare two versions (or a version and your saves now) before restoring; back up when Steam's app manifest shows an update waiting or starting; wait until no save file changed for 10 s |
 | **1.3** | Second copy to a folder you pick (cloud-synced folder or USB drive), mirrored after each backup and pruned in step; size limits per game and for the whole vault (oldest first, never a game's newest) |
 | **1.4** | Hallow Hub's game page shows Saves (last backup, Back up now, Restore); Hallow Remote: Back up now from the phone - both through the family link |
+| **1.5** | One Hallow icon: pipe `open`/`menu`/`invoke`/`quit` for Hub's family tray menu; Vault's icon hidden while Hub hosts it (Use the Hallow icon, on by default); balloons through Hub `notify` |
 
 ## Next
-
-### 1.5 - One Hallow icon
-- Hallow Hub hosts the tray menu for the whole family: Vault's actions (Back up everything, Restore, Open the vault folder) in Hub's icon, Vault's own icon hidden while Hub hosts it
-- Setting: Use the Hallow icon (on by default); messages go through Hub's icon while Vault's is hidden
 
 ### Later
 - Fixes from real use: check the game-closed backup after real game sessions

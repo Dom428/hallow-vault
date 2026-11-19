@@ -37,6 +37,7 @@ namespace HallowVault
         [DataMember] public bool BeforeUpdate = true;                   // v1.2: and right before Steam updates it
         [DataMember] public string CopyDir = "";                        // v1.3: second copy of every backup ("" = off)
         [DataMember] public int MaxGameMB = 0, MaxTotalMB = 0;          // v1.3: size limits (0 = none); oldest versions go first
+        [DataMember] public bool UseHallowIcon = true;                  // v1.5: hide our tray icon while Hallow Hub hosts the family menu
         [DataMember] public string LastDaily = "";
         [DataMember] public bool TrayOnClose = true;
         [DataMember] public Dictionary<string, List<string>> Extra = new Dictionary<string, List<string>>();   // folders you added, per game
@@ -46,10 +47,10 @@ namespace HallowVault
         [OnDeserializing] void D(StreamingContext c)
         {
             VaultDir = ""; Keep = 10; OnClose = true; Daily = true; LastDaily = ""; TrayOnClose = true; Extra = new Dictionary<string, List<string>>(); Off = new List<string>();
-            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0;
+            LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0; UseHallowIcon = true;
         }
 
-        public static string Dir { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HallowVault"); } }
+        public static string Dir { get { return Link.TestDir != null ? Path.Combine(Link.TestDir, "HallowVault") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HallowVault"); } }
         static string FilePath { get { return Path.Combine(Dir, "vault.json"); } }
         public static bool Frozen;
         static DataContractJsonSerializerSettings Opts() { return new DataContractJsonSerializerSettings { UseSimpleDictionaryFormat = true }; }

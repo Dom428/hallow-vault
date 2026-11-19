@@ -13,6 +13,7 @@ namespace HallowVault
     {
         // Newest first. One or two short lines per version.
         public static readonly Tuple<string, string[]>[] Notes = {
+            Tuple.Create("1.5", new[] { "One Hallow icon: with Hallow Hub running, Vault lives in Hub's tray menu (Back up everything, Restore, Open the vault folder) instead of its own icon", "Settings: Use the Hallow icon (on by default)" }),
             Tuple.Create("1.4", new[] { "Hallow Hub's game pages show each game's Saves: last backup, Back up now, Restore", "Hallow Remote: Back up now from your phone" }),
             Tuple.Create("1.3", new[] { "Second copy (Settings): every backup is copied to a OneDrive, Google Drive or Dropbox folder, or a USB drive", "Size limits per game and for the whole vault - the oldest versions go first, never a game's newest" }),
             Tuple.Create("1.2", new[] { "Restore > Compare: see which files were added, removed, got bigger or smaller before you restore", "Backs up a Steam game right before it updates, and never while a game is still writing its saves" }),

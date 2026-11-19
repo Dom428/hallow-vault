@@ -15,7 +15,11 @@ namespace HallowVault
 {
     public static class Link
     {
-        public static string PipeName { get { return "HallowFamily.Vault." + Environment.UserName; } }
+        // HALLOW_FAMILY_TEST=<folder> (same as the other Hallow apps): pipes end in ".test" and settings live in <folder>\HallowVault,
+        // so a test copy never meets the real apps
+        public static string TestDir { get { var t = Environment.GetEnvironmentVariable("HALLOW_FAMILY_TEST"); return string.IsNullOrEmpty(t) ? null : t; } }
+        public static string PipeOf(string app) { return "HallowFamily." + app + "." + Environment.UserName + (TestDir != null ? ".test" : ""); }
+        public static string PipeName { get { return PipeOf("Vault"); } }
         static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
         // Runs the server on a background thread. handler gets one command line and returns the reply line.
@@ -76,17 +80,19 @@ namespace HallowVault
         }
 
         // Sends one line to the running Hallow Vault. 0 = ok, 1 = error reply, 2 = not running.
-        public static int Send(string line, out string reply)
+        public static int Send(string line, out string reply) { return SendTo("Vault", line, 1500, 10000, out reply); }
+        // v1.5: one line to another Hallow app (Hub's tray-host / notify)
+        public static int SendTo(string app, string line, int connectMs, int replyMs, out string reply)
         {
             reply = null;
             try
             {
-                using (var c = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+                using (var c = new NamedPipeClientStream(".", PipeOf(app), PipeDirection.InOut, PipeOptions.Asynchronous))
                 {
-                    try { c.Connect(1500); } catch (TimeoutException) { return 2; } catch (IOException) { return 2; }
+                    try { c.Connect(connectMs); } catch (TimeoutException) { return 2; } catch (IOException) { return 2; }
                     var b = Utf8.GetBytes(line.Replace("\r", " ").Replace("\n", " ") + "\n");
                     c.Write(b, 0, b.Length); c.Flush();
-                    reply = ReadLine(c, 10000);
+                    reply = ReadLine(c, replyMs);
                     if (reply == null) { reply = "error no reply"; return 1; }
                     return reply == "ok" || reply.StartsWith("ok ") ? 0 : 1;
                 }

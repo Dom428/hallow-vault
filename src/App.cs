@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyVersion("1.5.0.0")]
+[assembly: AssemblyFileVersion("1.5.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.4";
+        public const string Version = "1.5";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -45,8 +45,9 @@ namespace HallowVault
                 new VaultWindow(true).SnapAll(args[si + 1]); return;
             }
             bool created;
-            var mutex = new Mutex(true, @"Local\HallowVault", out created);
-            var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\HallowVaultShow");
+            var sfx = Link.TestDir != null ? ".test" : "";   // a test copy runs beside the real one
+            var mutex = new Mutex(true, @"Local\HallowVault" + sfx, out created);
+            var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\HallowVaultShow" + sfx);
             if (!created) { showEvent.Set(); return; }
             var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; LoadTheme(app);
             var w = new VaultWindow(args.Contains("--tray"));
@@ -75,7 +76,7 @@ namespace HallowVault
         readonly Tracker tracker = new Tracker();
         string steamUser;
         StackPanel list; TextBlock summary, status; Border settingsPanel; ToggleButton gearBtn; Button allBtn;
-        WF.NotifyIcon tray; DispatcherTimer poll, hourly, updWatch;
+        WF.NotifyIcon tray; DispatcherTimer poll, hourly, updWatch, hostWatch;
         readonly Dictionary<string, bool> updState = new Dictionary<string, bool>();   // v1.2: Steam app id -> update waiting/running
         readonly Dictionary<string, int> settleTries = new Dictionary<string, int>();   // v1.2: game id -> times we waited for its files to settle
         readonly object busy = new object(); bool working; readonly Queue<Tuple<Game, string>> queue = new Queue<Tuple<Game, string>>();
@@ -97,7 +98,7 @@ namespace HallowVault
                 if (!exiting && S.TrayOnClose && !Snap.On)
                 {
                     e.Cancel = true; Hide();
-                    if (!toldTray && tray != null) { toldTray = true; tray.ShowBalloonTip(4000, "Hallow Vault", "Still running in the tray - it backs up your saves when a game closes. Right-click the icon to quit.", WF.ToolTipIcon.None); }
+                    if (!toldTray && tray != null) { toldTray = true; Notify("Hallow Vault", hosted ? "Still running - it backs up your saves when a game closes. It's in the Hallow icon's menu." : "Still running in the tray - it backs up your saves when a game closes. Right-click the icon to quit."); }
                 }
                 else Quit();
             };
@@ -122,6 +123,9 @@ namespace HallowVault
             updWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
             updWatch.Tick += (s, e) => CheckSteamUpdates();
             updWatch.Start();
+            hostWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            hostWatch.Tick += (s, e) => CheckTrayHost();
+            hostWatch.Start(); CheckTrayHost();
             Dispatcher.BeginInvoke(new Action(CheckDaily), DispatcherPriority.ApplicationIdle);
             Dispatcher.BeginInvoke(new Action(CheckSteamUpdates), DispatcherPriority.ApplicationIdle);
             Link.Serve(LinkCommand);
@@ -147,13 +151,17 @@ namespace HallowVault
             var sp = line.IndexOf(' ');
             var cmd = (sp < 0 ? line : line.Substring(0, sp)).ToLowerInvariant(); var arg = sp < 0 ? "" : line.Substring(sp + 1).Trim();
             if (cmd == "ping") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version } });
-            if (cmd != "status" && cmd != "backup" && cmd != "restore") return "error unknown command";
+            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit") return "error unknown command";
             var r = Dispatcher.Invoke(new Func<string>(() => LinkOnUi(cmd, arg)), TimeSpan.FromSeconds(5));
             return r as string ?? "error Hallow Vault is busy, try again";
         }
         string LinkOnUi(string cmd, string arg)
         {
             if (cmd == "status") return "ok " + Link.Json(StatusData());
+            if (cmd == "open") { ShowFromTray(); return "ok"; }
+            if (cmd == "quit") { var qt = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) }; qt.Tick += (s, e) => { qt.Stop(); Quit(); }; qt.Start(); return "ok"; }   // after the reply is sent
+            if (cmd == "menu") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "items", MenuItems() } });
+            if (cmd == "invoke") return InvokeItem(arg);
             if (arg.Length == 0) return "error which game? (a game name, or all)";
             if (cmd == "backup" && arg.Equals("all", StringComparison.OrdinalIgnoreCase))
             {
@@ -191,6 +199,65 @@ namespace HallowVault
             return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "games", gl } };
         }
         void WriteStatus() { if (!Snap.On) Link.WriteStatus(StatusData()); }
+
+        // ================================================================ v1.5: one Hallow icon (Hallow Hub hosts the tray menu)
+        // the same useful actions as our own tray menu (Hub adds Open and Exit)
+        List<object> MenuItems()
+        {
+            bool isBusy; lock (busy) isBusy = working;
+            Func<string, string, bool, Dictionary<string, object>> it = (id, label, on) => new Dictionary<string, object> { { "id", id }, { "label", label }, { "enabled", on } };
+            return new List<object> {
+                it("backup-all", isBusy ? "Backing up..." : "Back up everything now", !isBusy), it("restore", "Restore...", true), it("vault", "Open the vault folder", true),
+                new Dictionary<string, object> { { "id", "-" } },
+                new Dictionary<string, object> { { "id", "onclose" }, { "label", "Back up when a game closes" }, { "checked", S.OnClose } },
+            };
+        }
+        string InvokeItem(string id)
+        {
+            switch (id.ToLowerInvariant())
+            {
+                case "backup-all": foreach (var g in Backable()) Enqueue(g, "you asked"); return "ok";
+                case "restore": ShowFromTray(); Status("Pick Restore next to a game to put an older version back."); return "ok";
+                case "vault": Directory.CreateDirectory(Root); Process.Start("explorer.exe", "\"" + Root + "\""); return "ok";
+                case "onclose": S.OnClose = !S.OnClose; S.Save(); Fill(); return "ok";
+                default: return "error no menu item called " + id;
+            }
+        }
+        bool hosted, asking;   // hosted: Hub showed it hosts the icon last time we asked
+        // on start and every 5 s: does Hub host the family icon? Hide ours while it does; never leave Vault without an icon.
+        void CheckTrayHost()
+        {
+            if (tray == null || asking) return;
+            if (!S.UseHallowIcon) { SetHosted(false); return; }
+            asking = true;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                string r; bool on = false;
+                try { on = Link.SendTo("Hub", "tray-host", 300, 1500, out r) == 0 && r.Replace(" ", "").Contains("\"on\":true"); } catch { }
+                Dispatcher.BeginInvoke(new Action(() => { asking = false; SetHosted(on && S.UseHallowIcon); }));
+            });
+        }
+        void SetHosted(bool on) { hosted = on; if (tray != null && !exiting && !ownBalloon) tray.Visible = !on; }
+        bool ownBalloon;
+        // a balloon: through Hub while our icon is hidden, else (or if Hub doesn't take it) from our own icon for a moment
+        void Notify(string title, string text)
+        {
+            if (tray == null) return;
+            if (!hosted) { tray.ShowBalloonTip(4000, title, text, WF.ToolTipIcon.None); return; }
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                string r; var ok = false;
+                try { ok = Link.SendTo("Hub", "notify Vault\t" + title + "\t" + text, 300, 1500, out r) == 0; } catch { }
+                if (ok) return;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    ownBalloon = true; tray.Visible = true; tray.ShowBalloonTip(4000, title, text, WF.ToolTipIcon.None);
+                    var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+                    t.Tick += (o, e) => { t.Stop(); ownBalloon = false; SetHosted(hosted); };
+                    t.Start();
+                }));
+            });
+        }
 
         static ImageSource AppIcon()
         {
@@ -285,6 +352,7 @@ namespace HallowVault
             sw("Back up everything once a day", S.Daily, v => S.Daily = v);
             sw("Keep running in the tray when I close the window", S.TrayOnClose, v => S.TrayOnClose = v);
             sw("Start with Windows (in the tray)", StartsWithWindows(), v => SetStartWithWindows(v));
+            sw("Use the Hallow icon (Hallow Hub's tray menu, instead of a Vault icon)", S.UseHallowIcon, v => { S.UseHallowIcon = v; CheckTrayHost(); });
             sp.Children.Add(new TextBlock { Text = "Backups are ordinary .zip files you can open anywhere. Logs, caches and crash dumps are left out, and so are secrets like app keys.",
                 Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
             sp.Children.Add(new TextBlock { Text = "Hallow Vault " + Program.Version + "  -  icons: Font Awesome Free (CC BY 4.0)", Foreground = (Brush)FindResource("Muted"), FontSize = 11, Margin = new Thickness(0, 10, 0, 0) });
