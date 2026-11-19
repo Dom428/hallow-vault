@@ -6,6 +6,10 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.6
+- Uses the Hallow accent colour you pick in Hallow Toolkit (Settings to turn it off).
+- If Vault ever closes unexpectedly it keeps a crash report on this PC and tells you next time.
+
 WHAT'S NEW IN 1.5
 - One Hallow icon: with Hallow Hub running, Vault lives in Hub's tray menu (Back up everything,
   Restore, Open the vault folder) instead of its own icon. Settings > Use the Hallow icon.
@@ -45,6 +49,7 @@ WHAT IT DOES
 - Logs, caches, crash dumps and secrets (like app keys) are left out.
 - Works with Hallow Hub (each game's Saves on its page) and Hallow Remote (Back up now from your phone).
 - With Hallow Hub running, Vault lives in Hub's tray icon instead of its own (Settings > Use the Hallow icon).
+- Uses the Hallow accent colour picked in Hallow Toolkit. Crash reports stay on this PC (never sent).
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.

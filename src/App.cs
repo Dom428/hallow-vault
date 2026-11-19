@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.5.0.0")]
-[assembly: AssemblyFileVersion("1.5.0.0")]
+[assembly: AssemblyVersion("1.6.0.0")]
+[assembly: AssemblyFileVersion("1.6.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.5";
+        public const string Version = "1.6";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -49,17 +49,15 @@ namespace HallowVault
             var mutex = new Mutex(true, @"Local\HallowVault" + sfx, out created);
             var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\HallowVaultShow" + sfx);
             if (!created) { showEvent.Set(); return; }
-            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; LoadTheme(app);
+            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; Crash.Install(app); LoadTheme(app);
             var w = new VaultWindow(args.Contains("--tray"));
+            // test copies only (HALLOW_FAMILY_TEST): crash on purpose to check the crash report
+            if (Link.TestDir != null && args.Contains("--test-crash")) w.Dispatcher.BeginInvoke(new Action(() => { throw new InvalidOperationException("Test crash (asked for with --test-crash)"); }), DispatcherPriority.ApplicationIdle);
             new Thread(() => { while (showEvent.WaitOne()) w.Dispatcher.BeginInvoke(new Action(w.ShowFromTray)); }) { IsBackground = true }.Start();
             app.Run();
             GC.KeepAlive(mutex);
         }
-        static void LoadTheme(Application app)
-        {
-            using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("HallowVault.Theme.xaml"))
-                app.Resources.MergedDictionaries.Add((ResourceDictionary)XamlReader.Load(s));
-        }
+        static void LoadTheme(Application app) { Accent.Apply(app, Accent.Want(VaultSettings.Load().UseHallowAccent)); }   // v1.6: with the Hallow accent
     }
 
     public class VaultWindow : Window
@@ -132,8 +130,45 @@ namespace HallowVault
             // What's new after an update (1.0 didn't remember the version, so someone with backups already is coming from 1.0)
             if (string.IsNullOrEmpty(S.LastSeenVersion)) S.LastSeenVersion = S.LastSig.Count > 0 ? "1.0" : Program.Version;
             S.Save();
-            IsVisibleChanged += (s, e) => { if (IsVisible) Dispatcher.BeginInvoke(new Action(ShowWhatsNew), DispatcherPriority.ApplicationIdle); };
+            IsVisibleChanged += (s, e) => { if (IsVisible) { Dispatcher.BeginInvoke(new Action(ShowWhatsNew), DispatcherPriority.ApplicationIdle); Dispatcher.BeginInvoke(new Action(ShowCrash), DispatcherPriority.ApplicationIdle); } };
+            Accent.Watch(Dispatcher, ApplyAccent);
             if (!startHidden) Show();
+        }
+
+        // ================================================================ v1.6: Hallow accent and crash reports
+        void ApplyAccent()
+        {
+            var want = Accent.Want(S.UseHallowAccent); if (string.Equals(want, Accent.Current, StringComparison.OrdinalIgnoreCase)) return;
+            Accent.Apply(Application.Current, want);
+            var open = settingsPanel != null && settingsPanel.Visibility == Visibility.Visible; var msg = status == null ? null : status.Text;
+            Content = Build(); Fill();
+            if (open) { gearBtn.IsChecked = true; settingsPanel.Visibility = Visibility.Visible; }
+            if (msg != null) Status(msg);
+        }
+        // once per crash report: "Hallow Vault closed unexpectedly last time"
+        void ShowCrash()
+        {
+            if (!IsVisible || Snap.On) return;
+            var f = Crash.Reports().FirstOrDefault(); if (f == null || System.IO.Path.GetFileName(f) == S.LastCrashShown) return;
+            S.LastCrashShown = System.IO.Path.GetFileName(f); S.Save();
+            BuildCrash(f, this).Show();
+        }
+        Window BuildCrash(string file, Window owner)
+        {
+            var w = Dialog("Hallow Vault", 480, owner);
+            var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
+            sp.Children.Add(new TextBlock { Text = "Hallow Vault closed unexpectedly last time", FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6), TextWrapping = TextWrapping.Wrap });
+            var when = Crash.Last();
+            sp.Children.Add(new TextBlock { Text = (when == null ? "" : "On " + when.Value.ToString("dddd d MMM, HH:mm") + ". ") + "A report was saved on this PC - nothing was sent anywhere. Your backups are fine.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap });
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
+            var det = new Button { Content = "Show details", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0) };
+            det.Click += (s, e) => { try { Process.Start("notepad.exe", "\"" + file + "\""); } catch { } };
+            var fol = new Button { Content = "Open folder", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0) };
+            fol.Click += (s, e) => { try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch { } };
+            var ok = new Button { Content = "OK", Style = (Style)FindResource("Accent"), MinWidth = 80, IsDefault = true, IsCancel = true };
+            ok.Click += (s, e) => w.Close();
+            row.Children.Add(det); row.Children.Add(fol); row.Children.Add(ok); sp.Children.Add(row);
+            w.Content = sp; return w;
         }
 
         void ShowWhatsNew()
@@ -196,7 +231,7 @@ namespace HallowVault
                     { "lastBackup", Link.Time(hs.Count == 0 ? (DateTime?)null : hs[0].When) }, { "versions", hs.Count }, { "sizeBytes", hs.Sum(x => x.Bytes) }, { "off", S.Off.Contains(g.Id) } });
             }
             bool isBusy; lock (busy) isBusy = working;
-            return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "games", gl } };
+            return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "games", gl } };
         }
         void WriteStatus() { if (!Snap.On) Link.WriteStatus(StatusData()); }
 
@@ -273,7 +308,7 @@ namespace HallowVault
             var head = new DockPanel { Margin = new Thickness(0, 0, 0, 14) };
             var title = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             try { title.Children.Add(new Image { Source = AppIcon(), Width = 30, Height = 30, Margin = new Thickness(0, 0, 10, 0) }); } catch { }
-            title.Children.Add(new TextBlock { Text = "HALLOW", FontSize = 22, FontWeight = FontWeights.Bold, Foreground = B("#F07820"), VerticalAlignment = VerticalAlignment.Center });
+            title.Children.Add(new TextBlock { Text = "HALLOW", FontSize = 22, FontWeight = FontWeights.Bold, Foreground = Accent.Brush(), VerticalAlignment = VerticalAlignment.Center });
             title.Children.Add(new TextBlock { Text = " VAULT", FontSize = 22, FontWeight = FontWeights.Light, VerticalAlignment = VerticalAlignment.Center });
             DockPanel.SetDock(title, Dock.Left); head.Children.Add(title);
             var right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -319,7 +354,7 @@ namespace HallowVault
             var sh = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
             var close = new Button { Content = "x", Tag = "icon", Style = (Style)FindResource("Btn"), Width = 30, Height = 28, Padding = new Thickness(0) };
             close.Click += (s, e) => gearBtn.IsChecked = false; DockPanel.SetDock(close, Dock.Right); sh.Children.Add(close);
-            var gi = Icons.Make("gear", 16, B("#F07820")); gi.Margin = new Thickness(0, 0, 10, 0); DockPanel.SetDock(gi, Dock.Left); sh.Children.Add(gi);
+            var gi = Icons.Make("gear", 16, Accent.Brush()); gi.Margin = new Thickness(0, 0, 10, 0); DockPanel.SetDock(gi, Dock.Left); sh.Children.Add(gi);
             sh.Children.Add(new TextBlock { Text = "Settings", FontWeight = FontWeights.Bold, FontSize = 16, VerticalAlignment = VerticalAlignment.Center });
             sp.Children.Add(sh);
             sp.Children.Add(new TextBlock { Text = "Backups go to", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 4) });
@@ -353,10 +388,11 @@ namespace HallowVault
             sw("Keep running in the tray when I close the window", S.TrayOnClose, v => S.TrayOnClose = v);
             sw("Start with Windows (in the tray)", StartsWithWindows(), v => SetStartWithWindows(v));
             sw("Use the Hallow icon (Hallow Hub's tray menu, instead of a Vault icon)", S.UseHallowIcon, v => { S.UseHallowIcon = v; CheckTrayHost(); });
+            sw("Use the Hallow accent colour (picked in Hallow Toolkit)", S.UseHallowAccent, v => { S.UseHallowAccent = v; Dispatcher.BeginInvoke(new Action(ApplyAccent)); });
             sp.Children.Add(new TextBlock { Text = "Backups are ordinary .zip files you can open anywhere. Logs, caches and crash dumps are left out, and so are secrets like app keys.",
                 Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
             sp.Children.Add(new TextBlock { Text = "Hallow Vault " + Program.Version + "  -  icons: Font Awesome Free (CC BY 4.0)", Foreground = (Brush)FindResource("Muted"), FontSize = 11, Margin = new Thickness(0, 10, 0, 0) });
-            b.Child = sp; return b;
+            b.Child = new ScrollViewer { Content = sp, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; return b;
         }
 
         // v1.3: second copy folder and size limits
@@ -744,6 +780,7 @@ namespace HallowVault
         {
             Snap.Save(this, System.IO.Path.Combine(dir, "main.png"), 1060, 740);
             settingsPanel.Visibility = Visibility.Visible; Snap.Save(this, System.IO.Path.Combine(dir, "settings.png"), 1060, 740);
+            var cr = Crash.Reports().FirstOrDefault(); if (cr != null) { var cw0 = BuildCrash(cr, this); Snap.Save(cw0, System.IO.Path.Combine(dir, "crash.png"), cw0.Width, 0); }
             // the restore and compare windows for the first game with two or more backups (read-only)
             var g = games.FirstOrDefault(x => history.ContainsKey(x.Id) && history[x.Id].Count >= 2);
             if (g != null)

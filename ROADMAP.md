@@ -10,14 +10,12 @@
 | **1.3** | Second copy to a folder you pick (cloud-synced folder or USB drive), mirrored after each backup and pruned in step; size limits per game and for the whole vault (oldest first, never a game's newest) |
 | **1.4** | Hallow Hub's game page shows Saves (last backup, Back up now, Restore); Hallow Remote: Back up now from the phone - both through the family link |
 | **1.5** | One Hallow icon: pipe `open`/`menu`/`invoke`/`quit` for Hub's family tray menu; Vault's icon hidden while Hub hosts it (Use the Hallow icon, on by default); balloons through Hub `notify` |
+| **1.6** | Hallow accent from `%APPDATA%\Hallow\theme.json` (live, Use the Hallow accent on by default); crash reports kept on this PC with a notice next start and `lastCrash` in status |
 
 ## Next
 
-### 1.6 - Hallow accent and crash reports
-- Use the Hallow accent colour picked in Hallow Toolkit (live, on by default)
-- Crash reports kept on this PC, a notice after a crash, lastCrash in status
-
 ### 1.7 - Pins, save alarms and moving PCs
+- Pin a version so it's never pruned (before a big boss, a finished run)
 - Save alarm: saves that suddenly shrink or vanish aren't backed up over - restore the last good one
 - Move to a new PC: export the newest (and pinned) versions, import them on the other PC
 

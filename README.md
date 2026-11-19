@@ -10,6 +10,8 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - Leaves out logs, caches, crash dumps and secrets.
 - **Hallow family:** Hallow Hub's game pages show each game's Saves (last backup, Back up now, Restore) and Hallow Remote has Back up now on your phone. The link: Named pipe `HallowFamily.Vault.<user>` (`ping`, `status`, `backup <game>`, `backup all`, `restore <game>` opens the restore window; current user only), `HallowVault.exe --cmd "backup all"` for scripts and Stream Deck, and `%APPDATA%\HallowVault\status.json`.
 - **One Hallow icon:** while Hallow Hub hosts the family tray menu, Vault hides its own icon and its actions (Back up everything now, Restore..., Open the vault folder, Back up when a game closes) are in Hub's menu; its messages show from Hub's icon. Pipe commands `open`, `menu`, `invoke <id>`, `quit`. Settings > Use the Hallow icon (on by default); without Hub, Vault keeps its own icon.
+- **Hallow accent:** uses the family accent colour from `%APPDATA%\Hallow\theme.json` (picked in Hallow Toolkit), live; Settings > Use the Hallow accent colour.
+- **Crash reports** stay on this PC (`%APPDATA%\HallowVault\crashes`, newest 20; no settings or file contents) with a notice next time; `status` has `lastCrash`.
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.
 
