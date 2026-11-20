@@ -1,0 +1,44 @@
+# Builds the app with the same build.ps1 used at home on every push and pull request, and draws every window with
+# --snap (made-up data) so a change that doesn't compile - or breaks a window - shows up straight away.
+# Nothing is released from here.
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: powershell
+        run: ./build.ps1
+      - name: Pictures of every window (made-up data)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force snaps | Out-Null
+          $p = Start-Process .\HallowVault.exe -ArgumentList '--snap', "$PWD\snaps" -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "--snap didn't finish in 3 minutes" }
+          if (-not (Get-ChildItem snaps -Filter *.png)) { throw "--snap made no pictures" }
+          Get-ChildItem snaps | Format-Table Name, Length
+      - name: Keep the exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: HallowVault
+          path: HallowVault.exe
+          retention-days: 7
+      - name: Keep the pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snaps
+          path: snaps
+          retention-days: 7
+          if-no-files-found: ignore
