@@ -6,6 +6,14 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.13
+- Second copy to a NAS share too (type \\NAS\share\folder in Settings). Every copy is read back and
+  checked (SHA-256), it can keep its own number of versions, and Verify copies checks them all again.
+- Restore > Preview: what changed since a backup, with sizes and times - and Restore file puts back
+  just one file. Your saves are always backed up first.
+- Finds saves in more common places (My Games, Saved Games, LocalLow) and shows which games Steam
+  Cloud already syncs.
+
 WHAT'S NEW IN 1.12
 - Check backups (the heart button, or Settings): every zip must open and every file must match
   its checksum - green, amber or red per game. It only reads. Weekly check in Settings (off).
@@ -88,6 +96,9 @@ WHAT IT DOES
 - Check backups: every zip must open and every file must match its checksum - green, amber or red.
   Only reads, never changes or deletes a backup. Weekly check in Settings (off by default).
 - Add a game: back up a game no launcher knows (name, save folders, optional .exe).
+- Second copy on a NAS share or any folder, checked by SHA-256, with its own number of versions.
+- Restore > Preview shows what changed (sizes and times); Restore file puts back just one file.
+- Shows which games Steam Cloud already syncs.
 
 UNINSTALL
 Windows Settings > Apps > Hallow Vault > Uninstall. Your backups are never deleted.

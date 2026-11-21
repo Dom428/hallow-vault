@@ -66,7 +66,7 @@ namespace HallowVault
         // forgets the game (its settings only); its backups stay in the vault
         public static void Remove(VaultSettings s, CustomGame c)
         {
-            s.Custom.Remove(c); s.Off.Remove(c.Id); s.LastSig.Remove(c.Id); s.Alarms.Remove(c.Id); s.Extra.Remove(c.Id); s.Include.Remove(c.Id); s.Exclude.Remove(c.Id);
+            s.Custom.Remove(c); s.Off.Remove(c.Id); s.LastSig.Remove(c.Id); s.Alarms.Remove(c.Id); s.Extra.Remove(c.Id); s.Include.Remove(c.Id); s.Exclude.Remove(c.Id); s.Results.Remove(c.Id);
         }
     }
 
@@ -99,11 +99,15 @@ namespace HallowVault
         [DataMember] public bool WeeklyCheck = false;                   // v1.12: check every backup once a week (off by default)
         [DataMember] public string LastCheck = "";
         [DataMember] public Dictionary<string, string> Checks = new Dictionary<string, string>();   // v1.12: backup folder name -> "<level>|<when>|<summary>" of the last check
+        [DataMember] public int CopyKeep = 0;                           // v1.13: versions kept per game in the second copy (0 = in step with the vault)
+        [DataMember] public string CopyVerified = "";                   // v1.13: the last Verify of the second copy: "<when>|<checked>|<bad>|<repaired>|<unverifiable>"
+        [DataMember] public Dictionary<string, string> Results = new Dictionary<string, string>();   // v1.13: game id -> "<ok|failed|refused>|<when>|<what>" of its last backup try
         [OnDeserializing] void D(StreamingContext c)
         {
             VaultDir = ""; Keep = 10; OnClose = true; Daily = true; LastDaily = ""; TrayOnClose = true; Extra = new Dictionary<string, List<string>>(); Off = new List<string>();
             LastSig = new Dictionary<string, string>(); LastSeenVersion = ""; LastUpdateCheck = ""; BeforeUpdate = true; CopyDir = ""; MaxGameMB = 0; MaxTotalMB = 0; UseHallowIcon = true; UseHallowAccent = true; LastCrashShown = ""; Alarms = new Dictionary<string, string>(); UseManifest = true; ManifestConfig = true; EveryHours = 0; LastScheduled = ""; Compression = "best"; Include = new Dictionary<string, List<string>>(); Exclude = new Dictionary<string, List<string>>();
             Custom = new List<CustomGame>(); WeeklyCheck = false; LastCheck = ""; Checks = new Dictionary<string, string>();
+            CopyKeep = 0; CopyVerified = ""; Results = new Dictionary<string, string>();
         }
 
         public static string Dir { get { return Link.TestDir != null ? Path.Combine(Link.TestDir, "HallowVault") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HallowVault"); } }

@@ -14,14 +14,18 @@ namespace HallowVault
     public class SaveRoot { public string Path, Kind; public long Bytes; public int Files; public string RegText; public string[] Include, Exclude; }   // Include/Exclude: v1.9 patterns   // RegText: v1.8, a registry root's .reg export
     public class FileStat { public long Bytes; public DateTime When; }
     // v1.2: one line of "what changed between two versions"
-    public class FileChange { public string Path, Kind; public long Old = -1, New = -1; }   // Kind: added, removed, bigger, smaller, changed
+    public class FileChange { public string Path, Kind; public long Old = -1, New = -1; public DateTime? OldWhen, NewWhen; }   // Kind: added, removed, bigger, smaller, changed   // v1.13: OldWhen/NewWhen
 
     public static class Saves
     {
-        static string Local { get { return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData); } }
-        static string Roaming { get { return Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData); } }
-        static string LocalLow { get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"AppData\LocalLow"); } }
-        static string Docs { get { return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments); } }
+        // v1.13: unit tests point every user folder at a fake profile in a temp folder (null = the real ones)
+        public static string Home;
+        static string Profile { get { return Home ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile); } }
+        static string Local { get { return Home != null ? System.IO.Path.Combine(Home, @"AppData\Local") : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData); } }
+        static string Roaming { get { return Home != null ? System.IO.Path.Combine(Home, @"AppData\Roaming") : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData); } }
+        static string LocalLow { get { return System.IO.Path.Combine(Profile, @"AppData\LocalLow"); } }
+        static string Docs { get { return Home != null ? System.IO.Path.Combine(Home, "Documents") : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments); } }
+        static string SavedGames { get { return System.IO.Path.Combine(Profile, "Saved Games"); } }
 
         // games that keep their settings somewhere no rule can guess
         static readonly Dictionary<string, string[]> Known = new Dictionary<string, string[]> {
@@ -157,18 +161,87 @@ namespace HallowVault
                 foreach (var key in RegChildren(@"Software", new HashSet<string> { Library.Norm(dv.Item1) }))
                     foreach (var gk in RegChildren(key, want)) add(Reg.Prefix + gk, "Registry");
             }
-            foreach (var root in new[] { System.IO.Path.Combine(Docs, "My Games"), System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Saved Games"), Docs })   // v1.8: Documents\<game> too
-            {
-                if (!Directory.Exists(root)) continue;
-                if (root == Docs && !guessFolders) continue;   // plain Documents\<game> is a guess too
-                try { foreach (var d in Directory.GetDirectories(root)) if (norm.Length >= 3 && Library.Norm(System.IO.Path.GetFileName(d)) == norm) add(d, "Documents"); } catch { }
-            }
+            // v1.13: the common places games keep saves, from a built-in list (Documents\My Games, Saved Games, LocalLow\<company>, AppData)
+            var steamRoot2 = Library.SteamPath();
+            foreach (var hit in CommonPlaces(gameNames, false)) if (!TooBroad(hit.Item1, dirs, steamRoot2)) add(hit.Item1, hit.Item2);   // the sure ones first
+            if (guessFolders && !list.Any(x => !x.Kind.StartsWith("Steam")))   // then guesses, only if still nothing
+                foreach (var hit in CommonPlaces(gameNames, true).Where(h => h.Item2 == "AppData" || h.Item2 == "Documents")) if (!TooBroad(hit.Item1, dirs, steamRoot2)) add(hit.Item1, hit.Item2);
             if (extra != null) foreach (var e in extra) add(e, g.Id != null && g.Id.StartsWith("vaultgame:") ? "Save folder" : "Added by you");   // v1.12: a game you added: its own save folders
             Tuple<string[], string[]> flt = Filters == null ? null : Filters(g.Id);   // v1.9: your include / leave-out patterns for this game
             if (flt != null) foreach (var r in list) { r.Include = flt.Item1; r.Exclude = flt.Item2; }
             foreach (var r in list) Measure(r);
-            list.RemoveAll(r => (r.Kind == "Developer folder" || r.Kind == "Documents") && r.Bytes > (200L << 20));   // a big guessed folder is a cache, not saves
+            list.RemoveAll(r => (r.Kind == "Developer folder" || r.Kind == "Documents" || r.Kind == "AppData") && r.Bytes > (200L << 20));   // a big guessed folder is a cache, not saves
+            list.RemoveAll(r => (r.Kind == "My Games" || r.Kind == "Saved Games") && r.Bytes > (1L << 30));   // v1.13: (named places get more room, but not videos and screenshots)
             return list;
+        }
+
+        // ---- v1.13: a built-in list of the common places games keep their saves. {game} = a folder named after the game, * = any one folder.
+        // Sure places are always used; guesses only for games nothing else (but Steam) found, and big guessed folders are dropped as caches.
+        public static readonly Tuple<string, string, bool>[] Patterns = {   // (pattern, kind, sure)
+            Tuple.Create(@"{docs}\My Games\{game}", "My Games", true),
+            Tuple.Create(@"{docs}\My Games\*\{game}", "My Games", true),
+            Tuple.Create(@"{savedgames}\{game}", "Saved Games", true),
+            Tuple.Create(@"{savedgames}\*\{game}", "Saved Games", true),
+            Tuple.Create(@"{locallow}\*\{game}", "AppData", false),
+            Tuple.Create(@"{roaming}\{game}", "AppData", false),
+            Tuple.Create(@"{local}\{game}", "AppData", false),
+            Tuple.Create(@"{docs}\{game}", "Documents", false),
+        };
+        static readonly HashSet<string> NotGameDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Programs", "Packages", "Microsoft", "Temp", "Steam", "My Games", "Saved Games", "Hallow Vault" };
+        // (folder, kind) for every pattern that matches one of the game's names
+        public static List<Tuple<string, string>> CommonPlaces(IEnumerable<string> gameNorms, bool guesses)
+        {
+            var res = new List<Tuple<string, string>>(); var names = gameNorms.Where(n => n.Length >= 3).ToList(); if (names.Count == 0) return res;
+            foreach (var p in Patterns)
+            {
+                if (!p.Item3 && !guesses) continue;
+                var parts = p.Item1.Replace("{docs}", Docs).Replace("{savedgames}", SavedGames).Replace("{locallow}", LocalLow).Replace("{roaming}", Roaming).Replace("{local}", Local).Split(new[] { "\\*\\" }, StringSplitOptions.None);
+                var bases = new List<string>();
+                var first = parts[0].Replace("\\{game}", "");
+                if (parts.Length == 1) bases.Add(first);
+                else try { if (Directory.Exists(first)) bases.AddRange(Directory.GetDirectories(first).Where(d => !NotGameDirs.Contains(System.IO.Path.GetFileName(d)))); } catch { }
+                foreach (var b in bases)
+                    try { if (Directory.Exists(b)) foreach (var d in Directory.GetDirectories(b)) if (!NotGameDirs.Contains(System.IO.Path.GetFileName(d)) && NameMatches(System.IO.Path.GetFileName(d), names)) res.Add(Tuple.Create(d, p.Item2)); } catch { }
+            }
+            return res;
+        }
+        // does a folder's name stand for the game? The same letters and digits ("Dark Souls III" = "DarkSoulsIII"), a leading "The" left out,
+        // or one ending with the other when the shorter has 8+ letters ("Skyrim Special Edition" for "The Elder Scrolls V: Skyrim Special Edition")
+        public static bool NameMatches(string folder, IEnumerable<string> gameNorms)
+        {
+            Func<string, string> the = s => s.StartsWith("the") && s.Length > 6 ? s.Substring(3) : s;
+            var f = the(Library.Norm(folder)); if (f.Length < 3) return false;
+            foreach (var n0 in gameNorms)
+            {
+                var n = the(n0 ?? ""); if (n.Length < 3) continue;
+                if (f == n) return true;
+                var shorter = f.Length < n.Length ? f : n; var longer = f.Length < n.Length ? n : f;
+                if (shorter.Length >= 8 && longer.EndsWith(shorter, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        // ---- v1.13: Steam Cloud - does Steam already sync this game's saves? Any Steam account on this PC whose cloud cache for the game
+        // (userdata\<account>\<appid>\remotecache.vdf) lists a synced file, or whose "remote" folder has files.
+        public static bool SteamCloud(Game g, string steamUser)
+        {
+            if (string.IsNullOrEmpty(steamUser) || g == null) return false;
+            var accounts = new List<string> { steamUser };
+            try { var ud = System.IO.Path.GetDirectoryName(steamUser); accounts.AddRange(Directory.GetDirectories(ud).Where(d => System.IO.Path.GetFileName(d).All(char.IsDigit) && !string.Equals(d, steamUser, StringComparison.OrdinalIgnoreCase))); } catch { }
+            foreach (var sg in new[] { g }.Concat(g.Alts).Where(x => x.Source == "steam" && x.Id != null && x.Id.StartsWith("steam:")))
+                foreach (var acc in accounts)
+                {
+                    var d = System.IO.Path.Combine(acc, sg.Id.Substring(6));
+                    try
+                    {
+                        if (!Directory.Exists(d)) continue;
+                        var rc = System.IO.Path.Combine(d, "remotecache.vdf");
+                        if (File.Exists(rc) && new FileInfo(rc).Length < (4L << 20) && File.ReadAllText(rc).Contains("\"sha\"")) return true;
+                        var r = System.IO.Path.Combine(d, "remote"); if (Directory.Exists(r) && Directory.EnumerateFileSystemEntries(r).Any()) return true;
+                    }
+                    catch { }
+                }
+            return false;
         }
 
         // ---- v1.11: the save database
@@ -478,43 +551,161 @@ namespace HallowVault
         }
         // the second copy: copies every backup the copy folder doesn't have yet, and removes copies older than the
         // oldest backup still in the vault (pruned there). A game folder with no backups in the vault is left alone.
-        public static int Mirror(string root, string copyRoot)
+        // v1.13: `keep` > 0 gives the copy its own retention instead: the newest `keep` backups of each game (and pinned ones) are
+        // copied and kept there, whatever the vault keeps. Every copy is checked against its backup (SHA-256) before it counts,
+        // and its hash goes in sha256.txt in that game's copy folder (sha256sum format), for Verify.
+        public static int Mirror(string root, string copyRoot) { return Mirror(root, copyRoot, 0); }
+        public static int Mirror(string root, string copyRoot, int keep)
         {
             if (string.IsNullOrEmpty(copyRoot) || !Directory.Exists(root)) return 0;
             int copied = 0;
-            foreach (var dir in Directory.GetDirectories(root))
-            {
-                var have = Zips(dir); if (have.Count == 0) continue;
-                var dst = System.IO.Path.Combine(copyRoot, System.IO.Path.GetFileName(dir)); Directory.CreateDirectory(dst);
-                foreach (var f in have)
+            lock (copyLock)
+                foreach (var dir in Directory.GetDirectories(root))
                 {
-                    var to = System.IO.Path.Combine(dst, f.Name); if (File.Exists(to)) continue;
-                    var part = to + ".part"; File.Copy(f.FullName, part, true); File.Move(part, to); copied++;
+                    var have = Zips(dir); if (have.Count == 0) continue;
+                    var pins = Pins(dir);
+                    var dst = System.IO.Path.Combine(copyRoot, System.IO.Path.GetFileName(dir)); Directory.CreateDirectory(dst);
+                    var hashes = ReadHashes(dst); bool changed = false;
+                    foreach (var f in Wanted(have, pins, keep))
+                    {
+                        var to = System.IO.Path.Combine(dst, f.Name); if (File.Exists(to)) continue;
+                        hashes[f.Name] = CopyVerified(f.FullName, to); changed = true; copied++;
+                    }
+                    var pf = System.IO.Path.Combine(dir, PinsFile); var pt = System.IO.Path.Combine(dst, PinsFile);   // v1.7: pins go along
+                    if (File.Exists(pf)) File.Copy(pf, pt, true); else if (File.Exists(pt)) File.Delete(pt);
+                    var copies = Zips(dst); List<FileInfo> gone;
+                    if (keep <= 0) { var oldest = have[have.Count - 1].Name; gone = copies.Where(c => string.CompareOrdinal(c.Name, oldest) < 0).ToList(); }
+                    else gone = copies.Where(c => !pins.Contains(c.Name)).Skip(Math.Max(1, keep)).ToList();   // its own retention (never the copy's newest)
+                    foreach (var c in gone) try { c.Delete(); } catch { }
+                    foreach (var k in hashes.Keys.ToList()) if (!File.Exists(System.IO.Path.Combine(dst, k))) { hashes.Remove(k); changed = true; }
+                    if (changed) WriteHashes(dst, hashes);
                 }
-                var pf = System.IO.Path.Combine(dir, PinsFile); var pt = System.IO.Path.Combine(dst, PinsFile);   // v1.7: pins go along
-                if (File.Exists(pf)) File.Copy(pf, pt, true); else if (File.Exists(pt)) File.Delete(pt);
-                var oldest = have[have.Count - 1].Name;
-                foreach (var c in Zips(dst)) if (string.CompareOrdinal(c.Name, oldest) < 0) try { c.Delete(); } catch { }
-            }
             return copied;
+        }
+        static readonly object copyLock = new object();
+        // the vault backups the second copy should have: all of them, or the newest `keep` and the pinned ones
+        static List<FileInfo> Wanted(List<FileInfo> have, HashSet<string> pins, int keep)
+        {
+            return keep <= 0 ? have : have.Where((f, i) => i < keep || pins.Contains(f.Name)).ToList();
+        }
+        public const string HashFile = "sha256.txt";
+        public static Action<string> AfterCopy;   // tests only: damages a fresh copy to prove the check catches it
+        public static string Sha256(string file)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16))
+                return BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+        }
+        // copies to <to>.part, reads both back and compares their SHA-256; only a matching copy takes the real name (one retry, then an error)
+        public static string CopyVerified(string src, string to)
+        {
+            var part = to + ".part";
+            for (int attempt = 1; ; attempt++)
+            {
+                File.Copy(src, part, true);
+                if (AfterCopy != null) AfterCopy(part);
+                var a = Sha256(src); var b = Sha256(part);
+                if (a == b) { if (File.Exists(to)) File.Delete(to); File.Move(part, to); return a; }
+                try { File.Delete(part); } catch { }
+                if (attempt >= 2) throw new IOException("the copy of " + System.IO.Path.GetFileName(src) + " didn't match the backup (SHA-256), twice");
+            }
+        }
+        public static Dictionary<string, string> ReadHashes(string dir)
+        {
+            var h = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var f = System.IO.Path.Combine(dir, HashFile);
+                if (File.Exists(f))
+                    foreach (var l in File.ReadAllLines(f))
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(l, @"^([0-9a-fA-F]{64}) [ *](.+)$");
+                        if (m.Success) h[m.Groups[2].Value.Trim()] = m.Groups[1].Value.ToLowerInvariant();
+                    }
+            }
+            catch { }
+            return h;
+        }
+        static void WriteHashes(string dir, Dictionary<string, string> h)
+        {
+            var f = System.IO.Path.Combine(dir, HashFile);
+            if (h.Count == 0) { if (File.Exists(f)) File.Delete(f); return; }
+            var tmp = f + ".tmp"; File.WriteAllLines(tmp, h.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => x.Value + " *" + x.Key));
+            if (File.Exists(f)) File.Replace(tmp, f, null); else File.Move(tmp, f);
+        }
+
+        // ---- v1.13: verify the second copy - every copy's SHA-256 against the one recorded when it was made (or the vault's own zip).
+        // A damaged copy whose backup is still in the vault is copied again (checked); one that can't be is reported, never deleted.
+        public class VerifyInfo { public int Checked, Ok, Repaired, Unverifiable; public List<string> Bad = new List<string>(); public string Error; public DateTime When = DateTime.Now; }
+        public static VerifyInfo VerifyCopy(string root, string copyRoot)
+        {
+            var v = new VerifyInfo();
+            try
+            {
+                if (string.IsNullOrEmpty(copyRoot) || !Directory.Exists(copyRoot)) { v.Error = "the second copy folder can't be reached"; return v; }
+                lock (copyLock)
+                    foreach (var dst in Directory.GetDirectories(copyRoot))
+                    {
+                        var hashes = ReadHashes(dst); bool changed = false; var srcDir = System.IO.Path.Combine(root, System.IO.Path.GetFileName(dst));
+                        foreach (var z in Zips(dst))
+                        {
+                            v.Checked++;
+                            var src = System.IO.Path.Combine(srcDir, z.Name); var hasSrc = File.Exists(src);
+                            string expect; hashes.TryGetValue(z.Name, out expect); string srcHash = null;
+                            if (expect == null && hasSrc) { expect = srcHash = Sha256(src); hashes[z.Name] = expect; changed = true; }   // copied before 1.13: recorded now
+                            if (expect == null) { v.Unverifiable++; continue; }   // an old copy the vault no longer has, with no recorded hash
+                            if (Sha256(z.FullName) == expect) { v.Ok++; continue; }
+                            if (hasSrc && (srcHash ?? Sha256(src)) == expect)
+                                try { hashes[z.Name] = CopyVerified(src, z.FullName); changed = true; v.Repaired++; continue; } catch { }
+                            v.Bad.Add(z.FullName);
+                        }
+                        if (changed) WriteHashes(dst, hashes);
+                    }
+            }
+            catch (Exception ex) { v.Error = ex.Message; }
+            return v;
+        }
+
+        // ---- v1.13: a second-copy folder you typed (a NAS share like \\NAS\share\Backups, a cloud folder, a USB drive): null when it's fine, or what's wrong
+        public static string CheckCopyDir(string path, string root, out string clean)
+        {
+            clean = (path ?? "").Trim().Trim('"').Replace('/', '\\'); if (clean.Length > 3) clean = clean.TrimEnd('\\');
+            const string example = "like D:\\Backups or \\\\NAS\\share\\Backups";
+            if (clean.Length == 0) return "Type a folder, " + example + ".";
+            if (clean.IndexOfAny(System.IO.Path.GetInvalidPathChars()) >= 0 || clean.IndexOfAny(new[] { '*', '?', '<', '>', '|', '"' }) >= 0 || clean.Contains("\\..")) return "That isn't a folder path.";
+            var unc = clean.StartsWith("\\\\"); var drive = clean.Length >= 3 && char.IsLetter(clean[0]) && clean[1] == ':' && clean[2] == '\\';
+            if (!unc && !drive) return "Type a full path, " + example + ".";
+            if (unc && clean.Substring(2).Split('\\').Count(x => x.Length > 0) < 2) return "A network path needs a share: \\\\NAS\\share (and a folder in it if you like).";
+            if (!string.IsNullOrEmpty(root) && Overlaps(clean, root)) return "Pick a folder outside the vault (" + root + ").";
+            try
+            {
+                var r = System.IO.Path.GetPathRoot(clean);
+                if (!unc && r.TrimEnd('\\').Equals(clean.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return "Pick a folder, not a whole drive - for example " + System.IO.Path.Combine(r, "Hallow Vault copy") + ".";
+                if (!Directory.Exists(r)) return unc ? r + " can't be reached right now - is the NAS on, and does it open in File Explorer?" : r + " isn't there (unplugged?).";
+                Directory.CreateDirectory(clean);
+                var probe = System.IO.Path.Combine(clean, ".hallow-vault-probe"); File.WriteAllText(probe, "ok"); File.Delete(probe);   // can Vault write there?
+            }
+            catch (Exception ex) { return "Vault can't write to " + clean + ": " + ex.Message; }
+            return null;
         }
         // ---- v1.10: is the second copy keeping up? Behind = vault backups the copy doesn't have; conflicts = copies a cloud app made
         // when two versions of a file met ("<backup> (1).zip", "<backup>-DESKTOP-PC.zip", "<backup> (conflicted copy ...).zip", "pins (1).txt").
         public class CopyInfo { public bool Reachable; public int Behind; public List<string> Conflicts = new List<string>(); public DateTime? Last; public string Error; }
         static readonly System.Text.RegularExpressions.Regex ConflictName = new System.Text.RegularExpressions.Regex(@"^(\d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d.+\.zip|pins.+\.txt)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        public static CopyInfo CopyState(string root, string copyRoot)
+        public static CopyInfo CopyState(string root, string copyRoot) { return CopyState(root, copyRoot, 0); }
+        public static CopyInfo CopyState(string root, string copyRoot, int keep)
         {
             var c = new CopyInfo();
             try
             {
                 var drive = System.IO.Path.GetPathRoot(System.IO.Path.GetFullPath(copyRoot));
-                if (!Directory.Exists(drive)) { c.Error = drive.TrimEnd('\\') + " isn't there (unplugged?)"; return c; }
+                if (!Directory.Exists(drive)) { c.Error = drive.TrimEnd('\\') + (drive.StartsWith("\\\\") ? " can't be reached (network share offline?)" : " isn't there (unplugged?)"); return c; }
                 c.Reachable = true;
                 foreach (var dir in Directory.Exists(root) ? Directory.GetDirectories(root) : new string[0])
                 {
                     var have = Zips(dir); if (have.Count == 0) continue;
                     var dst = System.IO.Path.Combine(copyRoot, System.IO.Path.GetFileName(dir));
-                    c.Behind += have.Count(f => !File.Exists(System.IO.Path.Combine(dst, f.Name)));
+                    c.Behind += Wanted(have, Pins(dir), keep).Count(f => !File.Exists(System.IO.Path.Combine(dst, f.Name)));   // v1.13: only what the copy keeps
                 }
                 if (Directory.Exists(copyRoot))
                     foreach (var dst in Directory.GetDirectories(copyRoot))
@@ -568,14 +759,31 @@ namespace HallowVault
             foreach (var kv in newer)
             {
                 FileStat o;
-                if (!older.TryGetValue(kv.Key, out o)) res.Add(new FileChange { Path = kv.Key, Kind = "added", New = kv.Value.Bytes });
-                else if (o.Bytes != kv.Value.Bytes) res.Add(new FileChange { Path = kv.Key, Kind = kv.Value.Bytes > o.Bytes ? "bigger" : "smaller", Old = o.Bytes, New = kv.Value.Bytes });
-                else if (Math.Abs((kv.Value.When - o.When).TotalSeconds) > 2.5) res.Add(new FileChange { Path = kv.Key, Kind = "changed", Old = o.Bytes, New = kv.Value.Bytes });   // zip times are 2-second steps
+                if (!older.TryGetValue(kv.Key, out o)) res.Add(new FileChange { Path = kv.Key, Kind = "added", New = kv.Value.Bytes, NewWhen = kv.Value.When });
+                else if (o.Bytes != kv.Value.Bytes) res.Add(new FileChange { Path = kv.Key, Kind = kv.Value.Bytes > o.Bytes ? "bigger" : "smaller", Old = o.Bytes, New = kv.Value.Bytes, OldWhen = o.When, NewWhen = kv.Value.When });
+                else if (Math.Abs((kv.Value.When - o.When).TotalSeconds) > 2.5) res.Add(new FileChange { Path = kv.Key, Kind = "changed", Old = o.Bytes, New = kv.Value.Bytes, OldWhen = o.When, NewWhen = kv.Value.When });   // zip times are 2-second steps
                 else same++;
             }
-            foreach (var kv in older) if (!newer.ContainsKey(kv.Key)) res.Add(new FileChange { Path = kv.Key, Kind = "removed", Old = kv.Value.Bytes });
+            foreach (var kv in older) if (!newer.ContainsKey(kv.Key)) res.Add(new FileChange { Path = kv.Key, Kind = "removed", Old = kv.Value.Bytes, OldWhen = kv.Value.When });
             var order = new[] { "added", "removed", "bigger", "smaller", "changed" };
             return res.OrderBy(c => Array.IndexOf(order, c.Kind)).ThenBy(c => c.Path, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        // v1.13: puts back just one file (by the full path it came from); false if the backup doesn't have it. Registry exports aren't single files.
+        public static bool RestoreFile(BackupInfo b, string dest)
+        {
+            if (string.IsNullOrEmpty(dest) || Reg.Is(dest) || Reg.Is(System.IO.Path.GetDirectoryName(dest) ?? "")) return false;
+            using (var z = ZipFile.OpenRead(b.File))
+                foreach (var e in z.Entries)
+                {
+                    var d = Where(b, e); if (d == null || !string.Equals(d, dest, StringComparison.OrdinalIgnoreCase)) continue;
+                    Directory.CreateDirectory(System.IO.Path.GetDirectoryName(d));
+                    var part = d + ".vault-part"; e.ExtractToFile(part, true);   // the whole file first, then swapped in
+                    if (File.Exists(d)) File.Replace(part, d, null); else File.Move(part, d);
+                    File.SetLastWriteTime(d, e.LastWriteTime.LocalDateTime);
+                    return true;
+                }
+            return false;
         }
 
         // Puts a backup's files back where they came from (overwriting those files; nothing else in the folders is deleted).

@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.12.0.0")]
-[assembly: AssemblyFileVersion("1.12.0.0")]
+[assembly: AssemblyVersion("1.13.0.0")]
+[assembly: AssemblyFileVersion("1.13.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.12";
+        public const string Version = "1.13";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -287,6 +287,7 @@ namespace HallowVault
             if (!S.WeeklyCheck || checking || Snap.On) return;
             DateTime last; if (DateTime.TryParse(S.LastCheck, out last) && (DateTime.Now - last).TotalDays < 7) return;
             RunCheck(null, true, true);
+            if (!string.IsNullOrEmpty(S.CopyDir)) VerifyCopyNow(true);   // v1.13: and the second copy, by SHA-256
         }
         // the coloured dot next to a game (its last check)
         FrameworkElement CheckDot(string gameDir)
@@ -593,7 +594,7 @@ namespace HallowVault
             var sp = line.IndexOf(' ');
             var cmd = (sp < 0 ? line : line.Substring(0, sp)).ToLowerInvariant(); var arg = sp < 0 ? "" : line.Substring(sp + 1).Trim();
             if (cmd == "ping") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version } });
-            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit" && cmd != "pin" && cmd != "unpin" && cmd != "check") return "error unknown command";
+            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit" && cmd != "pin" && cmd != "unpin" && cmd != "check" && cmd != "verify") return "error unknown command";
             var r = Dispatcher.Invoke(new Func<string>(() => LinkOnUi(cmd, arg)), TimeSpan.FromSeconds(5));
             return r as string ?? "error Hallow Vault is busy, try again";
         }
@@ -610,6 +611,12 @@ namespace HallowVault
                 if (arg.Length == 0 || arg.Equals("all", StringComparison.OrdinalIgnoreCase)) { RunCheck(null, true); return "ok"; }
                 var cgm = FindGame(arg); if (cgm == null) return "error Hallow Vault doesn't know a game called " + arg;
                 RunCheck(cgm, true); return "ok";
+            }
+            if (cmd == "verify")   // v1.13: verify the second copy in the background; the result is in status (secondCopy.verified / mismatched)
+            {
+                if (string.IsNullOrEmpty(S.CopyDir)) return "error no second copy is set up";
+                if (verifying) return "error a verify is already running";
+                VerifyCopyNow(true); return "ok";
             }
             if (arg.Length == 0) return "error which game? (a game name, or all)";
             if (cmd == "backup" && arg.Equals("all", StringComparison.OrdinalIgnoreCase))
@@ -649,14 +656,47 @@ namespace HallowVault
                 List<BackupInfo> hs; if (!history.TryGetValue(g.Id, out hs)) hs = new List<BackupInfo>();
                 gl.Add(new Dictionary<string, object> { { "name", g.Name }, { "installDir", string.IsNullOrEmpty(g.InstallDir) ? null : g.InstallDir },
                     { "lastBackup", Link.Time(hs.Count == 0 ? (DateTime?)null : hs[0].When) }, { "versions", hs.Count }, { "sizeBytes", hs.Sum(x => x.Bytes) }, { "off", S.Off.Contains(g.Id) }, { "pinned", hs.Count(x => x.Pinned) }, { "alarm", S.Alarms.ContainsKey(g.Id) },
-                    { "custom", g.Source == "custom" }, { "check", CheckWord(Backups.GameDir(Root, g)) } });
+                    { "custom", g.Source == "custom" }, { "check", CheckWord(Backups.GameDir(Root, g)) },
+                    { "steamCloud", steamCloud.Contains(g.Id) }, { "lastResult", ResultOf(g.Id) } });   // v1.13
             }
             int cl; DateTime cw; string cs; int fine = 0, warn = 0, bad = 0;
             foreach (var v in S.Checks.Values) if (Checker.Unpack(v, out cl, out cw, out cs)) { if (cl == 2) bad++; else if (cl == 1) warn++; else fine++; }
             DateTime lastChk; var hasChk = DateTime.TryParse(S.LastCheck, out lastChk);
             var check = new Dictionary<string, object> { { "when", hasChk ? Link.Time(lastChk) : null }, { "running", checking }, { "fine", fine }, { "warning", warn }, { "damaged", bad }, { "weekly", S.WeeklyCheck } };
             bool isBusy; lock (busy) isBusy = working;
-            return new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "secondCopy", string.IsNullOrEmpty(S.CopyDir) || copyState == null ? null : new Dictionary<string, object> { { "reachable", copyState.Reachable }, { "behind", copyState.Behind }, { "conflicts", copyState.Conflicts.Count } } }, { "lastCheck", check }, { "games", gl } };
+            var d = new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "secondCopy", string.IsNullOrEmpty(S.CopyDir) || copyState == null ? null : CopyStatus() }, { "lastCheck", check }, { "games", gl } };
+            // v1.13: backup health in one place (for Hallow Hub and Hallow Guard): the newest backup, whether the latest backup try worked, and which games need a look
+            DateTime? newest = null; foreach (var hs in history.Values) if (hs.Count > 0 && (newest == null || hs[0].When > newest)) newest = hs[0].When;
+            d["lastBackupAt"] = Link.Time(newest);
+            var latest = S.Results.Select(kv => Tuple.Create(kv.Key, ParseResult(kv.Value))).Where(x => x.Item2 != null && games.Any(gm => gm.Id == x.Item1 && !S.Off.Contains(gm.Id))).OrderByDescending(x => x.Item2.Item2).FirstOrDefault();
+            d["lastBackupOk"] = latest == null ? (object)null : latest.Item2.Item1 == "ok";
+            var failing = new List<object>();
+            foreach (var g in games.Where(x => !S.Off.Contains(x.Id) && ((roots.ContainsKey(x.Id) && roots[x.Id].Count > 0) || S.Alarms.ContainsKey(x.Id))).OrderBy(x => x.Name))
+            {
+                var why = new List<string>(); var r = S.Results.ContainsKey(g.Id) ? ParseResult(S.Results[g.Id]) : null;
+                if (r != null && r.Item1 == "failed") why.Add("backup failed");
+                if (S.Alarms.ContainsKey(g.Id) || (r != null && r.Item1 == "refused")) why.Add("saves look damaged");
+                if (CheckWord(Backups.GameDir(Root, g)) == "damaged") why.Add("a backup is damaged");
+                if (why.Count > 0) failing.Add(new Dictionary<string, object> { { "name", g.Name }, { "why", string.Join(", ", why) } });
+            }
+            d["failingGames"] = failing;
+            return d;
+        }
+        Dictionary<string, object> CopyStatus()   // v1.10 fields, plus v1.13's path, retention and the last Verify
+        {
+            DateTime vw; int vc, vb, vr, vo; var hasV = ParseVerified(out vw, out vc, out vb, out vr, out vo);
+            return new Dictionary<string, object> { { "reachable", copyState.Reachable }, { "behind", copyState.Behind }, { "conflicts", copyState.Conflicts.Count },
+                { "path", S.CopyDir }, { "keep", S.CopyKeep }, { "verified", hasV ? Link.Time(vw.ToLocalTime()) : null }, { "copies", hasV ? vc : 0 }, { "mismatched", hasV ? vb : 0 } };
+        }
+        static Tuple<string, DateTime, string> ParseResult(string packed)   // "<ok|failed|refused>|<when>|<what>"
+        {
+            var p = (packed ?? "").Split(new[] { '|' }, 3); DateTime w;
+            return p.Length == 3 && DateTime.TryParse(p[1], null, System.Globalization.DateTimeStyles.RoundtripKind, out w) ? Tuple.Create(p[0], w, p[2]) : null;
+        }
+        object ResultOf(string id)
+        {
+            string v; var r = S.Results.TryGetValue(id, out v) ? ParseResult(v) : null;
+            return r == null ? null : new Dictionary<string, object> { { "result", r.Item1 }, { "when", Link.Time(r.Item2) }, { "what", r.Item3 } };
         }
         string CheckWord(string gameDir)   // v1.12: "ok" / "warning" / "damaged" from the last check, or null
         {
@@ -973,20 +1013,49 @@ namespace HallowVault
             var path = new TextBlock { Foreground = (Brush)FindResource("Muted"), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
             var off = new Button { Content = "Turn off", Tag = "icon", Width = 32, Height = 30, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(6, 0, 0, 0), ToolTip = "Stop making a second copy (copies already made stay)" };
             var pick = new Button { Content = "Pick...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
-            Action show = () => { path.Text = string.IsNullOrEmpty(S.CopyDir) ? "Off" : S.CopyDir; off.Visibility = string.IsNullOrEmpty(S.CopyDir) ? Visibility.Collapsed : Visibility.Visible; ShowCopyState(); };
+            Action show = () => { path.Text = string.IsNullOrEmpty(S.CopyDir) ? "Off" : S.CopyDir; off.Visibility = string.IsNullOrEmpty(S.CopyDir) ? Visibility.Collapsed : Visibility.Visible; ShowCopyState(); ShowVerifyState(); };
             pick.Click += (s, e) =>
             {
-                using (var d = new WF.FolderBrowserDialog { Description = "Where should Hallow Vault keep a second copy of every backup? A OneDrive, Google Drive or Dropbox folder, or a USB drive.", ShowNewFolderButton = true })
+                using (var d = new WF.FolderBrowserDialog { Description = "Where should Hallow Vault keep a second copy of every backup? A NAS or network folder, a OneDrive, Google Drive or Dropbox folder, or a USB drive.", ShowNewFolderButton = true })
                 {
                     if (!string.IsNullOrEmpty(S.CopyDir)) d.SelectedPath = S.CopyDir;
                     if (d.ShowDialog() != WF.DialogResult.OK) return;
-                    if (Backups.Overlaps(d.SelectedPath, Root)) { Status("Pick a folder outside " + Root + " for the second copy."); return; }
-                    S.CopyDir = d.SelectedPath; S.Save(); show(); CopyNow();
+                    string clean; var err = Backups.CheckCopyDir(d.SelectedPath, Root, out clean);
+                    if (err != null) { Status(err); return; }
+                    S.CopyDir = clean; S.CopyVerified = ""; S.Save(); show(); CopyNow();
                 }
             };
             off.Click += (s, e) => { S.CopyDir = ""; S.Save(); show(); Status("No second copy from now on. Copies already made stay where they are."); };
-            show();
             DockPanel.SetDock(off, Dock.Right); row.Children.Add(off); DockPanel.SetDock(pick, Dock.Right); row.Children.Add(pick); row.Children.Add(path); sp.Children.Add(row);
+            // v1.13: or type one - a NAS share (\\NAS\share\Backups) the folder picker can't always browse to
+            var typed = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+            var typedBox = new TextBox { Style = (Style)FindResource("Field"), ToolTip = "A full path: D:\\Backups, or a network share like \\\\NAS\\share\\Hallow Vault" };
+            var use = new Button { Content = "Use this folder", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
+            use.Click += (s, e) =>
+            {
+                string clean; var err = Backups.CheckCopyDir(typedBox.Text, Root, out clean);
+                if (err != null) { Status(err); return; }
+                S.CopyDir = clean; S.CopyVerified = ""; S.Save(); typedBox.Text = ""; show(); CopyNow();
+            };
+            DockPanel.SetDock(use, Dock.Right); typed.Children.Add(use);
+            var tl = new TextBlock { Text = "or type a path", Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            DockPanel.SetDock(tl, Dock.Left); typed.Children.Add(tl); typed.Children.Add(typedBox); sp.Children.Add(typed);
+            // v1.13: its own retention
+            var kp = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+            var kbox = new ComboBox { Style = (Style)FindResource("Combo"), Width = 190 };
+            foreach (var n in new[] { 0, 5, 10, 20, 30, 50, 100 }) kbox.Items.Add(new ComboBoxItem { Content = n == 0 ? "Same as the vault" : "Newest " + n + " per game", Tag = n });
+            kbox.SelectedItem = kbox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == S.CopyKeep) ?? kbox.Items[0];
+            kbox.SelectionChanged += (s, e) => { var it = kbox.SelectedItem as ComboBoxItem; if (it == null) return; S.CopyKeep = (int)it.Tag; S.Save(); if (!string.IsNullOrEmpty(S.CopyDir)) CopyNow(); };
+            DockPanel.SetDock(kbox, Dock.Right); kp.Children.Add(kbox);
+            kp.Children.Add(new TextBlock { Text = "Versions kept in the second copy", VerticalAlignment = VerticalAlignment.Center, ToolTip = "Same as the vault: old copies go when the vault prunes them. Or keep more (or fewer) there - pinned versions always stay." });
+            sp.Children.Add(kp);
+            // v1.13: verify every copy by its SHA-256
+            verifyLine = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            verifyBtn = new Button { Content = "Verify copies", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Read every copy back and compare its SHA-256 with the one recorded when it was made (a damaged copy is copied again from the vault)" };
+            verifyBtn.Click += (s, e) => VerifyCopyNow(false);
+            verifyText = new TextBlock { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+            DockPanel.SetDock(verifyBtn, Dock.Right); verifyLine.Children.Add(verifyBtn); verifyLine.Children.Add(verifyText); sp.Children.Add(verifyLine);
+            show();
             // v1.10: is it keeping up?
             copyLine = new DockPanel { Margin = new Thickness(0, 0, 0, 4), Visibility = Visibility.Collapsed };
             copyShow = new Button { Content = "Show", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0), Visibility = Visibility.Collapsed, ToolTip = "Open the folder with the sync conflict copies" };
@@ -994,7 +1063,7 @@ namespace HallowVault
             copyText = new TextBlock { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
             DockPanel.SetDock(copyShow, Dock.Right); copyLine.Children.Add(copyShow); copyLine.Children.Add(copyText); sp.Children.Add(copyLine);
             ShowCopyState();
-            sp.Children.Add(new TextBlock { Text = "A OneDrive, Google Drive or Dropbox folder, or a USB drive. Every backup is copied there too, and old ones go in step with the vault.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            sp.Children.Add(new TextBlock { Text = "A NAS or network share, a OneDrive, Google Drive or Dropbox folder, or a USB drive. Every backup is copied there too and read back to check it matches (SHA-256) before it counts.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
             Func<string, int[], Func<int>, Action<int>, string, DockPanel> limit = (label, opts, get, set, unit) =>
             {
                 var dp = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
@@ -1024,14 +1093,14 @@ namespace HallowVault
         {
             if (string.IsNullOrEmpty(S.CopyDir)) { copyState = null; ShowCopyState(); return; }
             if (copyChecking) return; copyChecking = true;
-            var root = Root; var copy = S.CopyDir; var snap = Snap.On;
+            var root = Root; var copy = S.CopyDir; var snap = Snap.On; var ck = S.CopyKeep;
             new Thread(() =>
             {
-                var st = Backups.CopyState(root, copy);
+                var st = Backups.CopyState(root, copy, ck);
                 if (!snap && st.Reachable && st.Behind > 0)   // catch up
                 {
-                    try { var n = Backups.Mirror(root, copy); Log.Add("Second copy", "caught up: " + n + " backup(s) copied to " + copy); } catch (Exception ex) { st.Error = ex.Message; Log.Add("Second copy", "couldn't catch up: " + ex.Message); }
-                    var again = Backups.CopyState(root, copy); again.Error = again.Error ?? st.Error; st = again;
+                    try { var n = Backups.Mirror(root, copy, ck); Log.Add("Second copy", "caught up: " + n + " backup(s) copied to " + copy); } catch (Exception ex) { st.Error = ex.Message; Log.Add("Second copy", "couldn't catch up: " + ex.Message); }
+                    var again = Backups.CopyState(root, copy, ck); again.Error = again.Error ?? st.Error; st = again;
                 }
                 Dispatcher.BeginInvoke(new Action(() => { copyChecking = false; copyState = st; ShowCopyState(); if (!snap) { Fill(); } }));
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
@@ -1059,14 +1128,53 @@ namespace HallowVault
         // copies every backup the second copy doesn't have yet (in the background)
         void CopyNow()
         {
-            var root = Root; var copy = S.CopyDir; if (string.IsNullOrEmpty(copy)) return;
+            var root = Root; var copy = S.CopyDir; var ck = S.CopyKeep; if (string.IsNullOrEmpty(copy)) return;
             Status("Copying your backups to " + copy + "...");
             new Thread(() =>
             {
-                string m; try { var n = Backups.Mirror(root, copy); m = n == 0 ? "The second copy in " + copy + " is up to date." : n + (n == 1 ? " backup" : " backups") + " copied to " + copy + ". New backups are copied there too."; }
+                string m; try { var n = Backups.Mirror(root, copy, ck); m = n == 0 ? "The second copy in " + copy + " is up to date." : n + (n == 1 ? " backup" : " backups") + " copied to " + copy + ". New backups are copied there too."; }
                 catch (Exception ex) { m = "Couldn't copy to " + copy + ": " + ex.Message; }
                 Dispatcher.BeginInvoke(new Action(() => { Status(m); CheckCopy(); }));
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
+        }
+
+        // ---- v1.13: verify the second copy (SHA-256 of every copy against the recorded one; damaged copies re-copied from the vault)
+        DockPanel verifyLine; TextBlock verifyText; Button verifyBtn; bool verifying;
+        void VerifyCopyNow(bool quiet)
+        {
+            var root = Root; var copy = S.CopyDir; if (string.IsNullOrEmpty(copy) || verifying) return;
+            verifying = true; ShowVerifyState(); if (!quiet) Status("Verifying the second copy in " + copy + "...");
+            new Thread(() =>
+            {
+                var v = Backups.VerifyCopy(root, copy);
+                Log.Add("Second copy", v.Error != null ? "verify failed: " + v.Error : "verified " + v.Checked + " copies: " + v.Ok + " match" + (v.Repaired > 0 ? ", " + v.Repaired + " damaged and copied again" : "") + (v.Bad.Count > 0 ? ", " + v.Bad.Count + " damaged: " + string.Join(", ", v.Bad.Select(System.IO.Path.GetFileName)) : "") + (v.Unverifiable > 0 ? ", " + v.Unverifiable + " too old to check" : ""));
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    verifying = false;
+                    if (v.Error == null) { S.CopyVerified = v.When.ToString("o") + "|" + v.Checked + "|" + v.Bad.Count + "|" + v.Repaired + "|" + v.Unverifiable; S.Save(); }
+                    ShowVerifyState(); WriteStatus();
+                    var m = v.Error != null ? "Couldn't verify the second copy: " + v.Error : v.Bad.Count > 0 ? v.Bad.Count + (v.Bad.Count == 1 ? " copy doesn't" : " copies don't") + " match its backup and the vault no longer has it to copy again - the backups in the vault are fine." : "All " + v.Checked + " copies match their backups" + (v.Repaired > 0 ? " (" + v.Repaired + " damaged " + (v.Repaired == 1 ? "one was" : "ones were") + " copied again)" : "") + ".";
+                    if (!quiet) Status(m); else if (v.Bad.Count > 0 || v.Repaired > 0) Notify("Hallow Vault", m);
+                }));
+            }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
+        }
+        bool ParseVerified(out DateTime when, out int count, out int bad, out int repaired, out int old)
+        {
+            when = DateTime.MinValue; count = bad = repaired = old = 0;
+            var p = (S.CopyVerified ?? "").Split('|');
+            return p.Length >= 5 && DateTime.TryParse(p[0], null, System.Globalization.DateTimeStyles.RoundtripKind, out when) && int.TryParse(p[1], out count) && int.TryParse(p[2], out bad) && int.TryParse(p[3], out repaired) && int.TryParse(p[4], out old);
+        }
+        void ShowVerifyState()
+        {
+            if (verifyLine == null) return;
+            verifyLine.Visibility = string.IsNullOrEmpty(S.CopyDir) ? Visibility.Collapsed : Visibility.Visible;
+            verifyBtn.IsEnabled = !verifying;
+            DateTime when; int count, bad, repaired, old;
+            if (verifying) { verifyText.Text = "Reading every copy back..."; verifyText.Foreground = (Brush)FindResource("Muted"); return; }
+            if (!ParseVerified(out when, out count, out bad, out repaired, out old)) { verifyText.Text = "New copies are checked as they're made. Verify reads every copy back."; verifyText.Foreground = (Brush)FindResource("Muted"); return; }
+            when = when.ToLocalTime();
+            verifyText.Text = "Verified " + VaultSettings.Ago(when) + ": " + (bad > 0 ? bad + " of " + count + (bad == 1 ? " copy doesn't" : " copies don't") + " match" : "all " + count + " copies match") + (repaired > 0 ? ", " + repaired + " copied again" : "") + (old > 0 ? " (" + old + " too old to check)" : "") + ".";
+            verifyText.Foreground = B(bad > 0 ? "#F07070" : "#6ED28C");
         }
 
         // ================================================================ data -> screen
@@ -1078,14 +1186,16 @@ namespace HallowVault
             games = Library.Scan(new List<Game>());
             games.Add(Hallow());
             games.AddRange(S.Custom.Select(c => c.ToGame()));   // v1.12: games you added
-            roots.Clear(); history.Clear();
+            roots.Clear(); history.Clear(); steamCloud.Clear();
             foreach (var g in games)
             {
                 roots[g.Id] = Saves.Find(g, steamUser, ExtraOf(g));
                 history[g.Id] = Backups.List(Root, g);
+                if (Saves.SteamCloud(g, steamUser)) steamCloud.Add(g.Id);   // v1.13
             }
             Fill();
         }
+        readonly HashSet<string> steamCloud = new HashSet<string>();   // v1.13: games Steam Cloud already syncs
         // folders you added to a game (and, for a game you added, its save folders)
         List<string> ExtraOf(Game g)
         {
@@ -1186,6 +1296,14 @@ namespace HallowVault
             var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
             nameRow.Children.Add(new TextBlock { Text = g.Name, FontSize = 14, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
             if (cg != null) nameRow.Children.Add(new TextBlock { Text = "added by you", FontSize = 10.5, Foreground = (Brush)FindResource("Muted"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 1, 0, 0) });
+            if (steamCloud.Contains(g.Id))   // v1.13: Steam Cloud syncs it too
+            {
+                var sc = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(9, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center, Background = Brushes.Transparent,
+                    ToolTip = "Steam Cloud also syncs this game's saves. Vault keeps its own versions as well: Steam Cloud keeps only the latest one, and it syncs a broken save just like a good one." };
+                var ci = Icons.Make("steam", 11, (Brush)FindResource("Muted")); ci.VerticalAlignment = VerticalAlignment.Center; sc.Children.Add(ci);
+                sc.Children.Add(new TextBlock { Text = "Steam Cloud", FontSize = 10.5, Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+                nameRow.Children.Add(sc);
+            }
             var dot = CheckDot(Backups.GameDir(Root, g)); if (dot != null) nameRow.Children.Add(dot);   // v1.12: the last backup check
             names.Children.Add(nameRow);
             var where = rs.Count == 0 ? "No save folder found" : string.Join("   ·   ", rs.Select(r => r.Kind + " (" + VaultSettings.Size(r.Bytes) + ")"));
@@ -1214,7 +1332,7 @@ namespace HallowVault
         {
             lock (busy) { if (queue.Any(q => q.Item1.Id == g.Id)) return; queue.Enqueue(Tuple.Create(g, force ? "!" + reason : reason)); if (working) return; working = true; }
             allBtn.IsEnabled = false; WriteStatus();
-            var root = Root; var keep = S.Keep; var maxGame = S.MaxGameMB * (1L << 20); var maxTotal = S.MaxTotalMB * (1L << 20); var copy = S.CopyDir;
+            var root = Root; var keep = S.Keep; var maxGame = S.MaxGameMB * (1L << 20); var maxTotal = S.MaxTotalMB * (1L << 20); var copy = S.CopyDir; var copyKeep = S.CopyKeep;
             new Thread(() =>
             {
                 while (true)
@@ -1242,14 +1360,16 @@ namespace HallowVault
                             msg = g2.Name + " backed up (" + VaultSettings.Size(b.Bytes) + ")" + (skipped > 0 ? " - " + skipped + " files were in use and skipped" : "") + "." +
                                 (cut > 0 ? " " + cut + (cut == 1 ? " old backup was" : " old backups were") + " removed to stay under the size limit." : "");
                             if (!string.IsNullOrEmpty(copy))   // v1.3: second copy, pruned in step
-                                try { Backups.Mirror(root, copy); } catch (Exception ex) { msg += " The second copy couldn't be made (" + ex.Message + ") - it will catch up next time."; logWhat += "; second copy failed: " + ex.Message; }
+                                try { Backups.Mirror(root, copy, copyKeep); } catch (Exception ex) { msg += " The second copy couldn't be made (" + ex.Message + ") - it will catch up next time."; logWhat += "; second copy failed: " + ex.Message; }
                             if (cut > 0) logWhat += "; " + cut + " old backup(s) removed for the size limit";
                         }
                     }
                     catch (Exception ex) { msg = "Couldn't back up " + g2.Name + ": " + ex.Message; logWhat = "failed (" + why + "): " + ex.Message; }
                     Log.Add(g2.Name, logWhat);
                     var m = msg; var gg = g2; var w2 = wait; var why2 = why; var al = alarm; var made = msg != null && msg.Contains(" backed up (");
-                    Dispatcher.BeginInvoke(new Action(() => { if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); if (al != null) RaiseAlarm(gg, al); else if (made && S.Alarms.Remove(gg.Id)) S.Save(); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, ExtraOf(gg)); Fill(); if (m != null) Status(m); }));
+                    var res = logWhat == null ? null : logWhat.StartsWith("backed up") ? "ok" : logWhat.StartsWith("failed") ? "failed" : logWhat.StartsWith("refused") ? "refused" : null;   // v1.13: skips and waits don't count
+                    var resWhat = logWhat;
+                    Dispatcher.BeginInvoke(new Action(() => { if (res != null) { S.Results[gg.Id] = res + "|" + DateTime.Now.ToString("o") + "|" + (resWhat ?? "").Replace("|", "/"); S.Save(); } if (w2) { Later(gg, why2, force2); return; } settleTries.Remove(gg.Id); if (al != null) RaiseAlarm(gg, al); else if (made && S.Alarms.Remove(gg.Id)) S.Save(); history[gg.Id] = Backups.List(Root, gg); roots[gg.Id] = Saves.Find(gg, steamUser, ExtraOf(gg)); Fill(); if (m != null) Status(m); }));
                 }
                 Dispatcher.BeginInvoke(new Action(() => { allBtn.IsEnabled = true; WriteStatus(); CheckCopy(); }));
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
@@ -1310,13 +1430,22 @@ namespace HallowVault
             w.SourceInitialized += (s, e) => { int dark = 1; DwmSetWindowAttribute(new WindowInteropHelper(w).Handle, 20, ref dark, 4); };
             return w;
         }
+        // v1.13: the safety backup before any restore (whole version or one file) - the saves as they are now, always, even if nothing changed.
+        // Throws if it can't be made, so the restore doesn't happen.
+        BackupInfo SafetyBackup(Game g, string reason)
+        {
+            var rs = Saves.Find(g, steamUser, ExtraOf(g)); if (rs.Count == 0) return null;   // nothing there to keep
+            int sk; var b = Backups.Make(Root, g, rs, reason, out sk);
+            Log.Add(g.Name, "safety backup (" + reason + "): " + VaultSettings.Size(b.Bytes) + ", " + rs.Sum(x => x.Files) + " files");
+            return b;
+        }
         Window BuildRestore(Game g)
         {
             var hs = Backups.List(Root, g);
             var w = Dialog("Restore " + g.Name, 600, this);
             var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
             sp.Children.Add(new TextBlock { Text = "Restore " + g.Name, FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
-            sp.Children.Add(new TextBlock { Text = "Pick a version. Your current saves are backed up first, so you can always come back. Compare shows what would change.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            sp.Children.Add(new TextBlock { Text = "Pick a version. Your current saves are backed up first, so you can always come back. Preview shows what would change, and can put back just one file.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
             var lst = new StackPanel();
             foreach (var b in hs)
             {
@@ -1328,8 +1457,7 @@ namespace HallowVault
                     if (MessageBox.Show(w, "Put back " + g.Name + "'s saves from " + bb.When.ToString("dddd d MMM, HH:mm") + "?\n\nYour current saves are backed up first.", "Restore", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
                     try
                     {
-                        var rs = Saves.Find(g, steamUser, ExtraOf(g)); int sk;
-                        if (rs.Count > 0) Backups.Make(Root, g, rs, "before restoring", out sk);   // safety copy (not pruned right away)
+                        SafetyBackup(g, "before restoring");   // safety copy (not pruned right away); if it fails, nothing is restored
                         var n = Backups.Restore(bb);
                         Log.Add(g.Name, "restored the version from " + bb.When.ToString("yyyy-MM-dd HH:mm") + " (" + n + " files; the saves from just before were backed up)");
                         S.LastSig.Remove(g.Id); S.Alarms.Remove(g.Id); S.Save();
@@ -1339,7 +1467,7 @@ namespace HallowVault
                     catch (Exception ex) { MessageBox.Show(w, "Couldn't restore: " + ex.Message, "Restore"); }
                 };
                 DockPanel.SetDock(go, Dock.Right); r.Children.Add(go);
-                var cmp = new Button { Content = "Compare", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 6, 0), ToolTip = "See which files are different from your saves now (or another version)" };
+                var cmp = new Button { Content = "Preview", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 6, 0), ToolTip = "See what restoring this would change - files added, removed or changed since, with sizes and times - and put back just one file if you like" };
                 cmp.Click += (s, e) => BuildCompare(g, hs, bb, w).ShowDialog();
                 DockPanel.SetDock(cmp, Dock.Right); r.Children.Add(cmp);
                 var t = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -1370,10 +1498,10 @@ namespace HallowVault
         // v1.2: what changed between two versions (or a version and your saves now) - nothing is changed here
         Window BuildCompare(Game g, List<BackupInfo> hs, BackupInfo pick, Window owner)
         {
-            var w = Dialog("Compare - " + g.Name, 680, owner);
+            var w = Dialog("Preview - " + g.Name, 820, owner);
             var sp = new StackPanel { Margin = new Thickness(22, 16, 22, 18) };
-            sp.Children.Add(new TextBlock { Text = "Compare " + g.Name + " versions", FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
-            sp.Children.Add(new TextBlock { Text = "Files added, removed, bigger or smaller. Nothing is changed here.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+            sp.Children.Add(new TextBlock { Text = "Preview " + g.Name + " versions", FontSize = 17, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+            sp.Children.Add(new TextBlock { Text = "Files added, removed, bigger, smaller or saved again since, with their sizes and times. Nothing changes here unless you press Restore file - and your saves are backed up first.", Foreground = (Brush)FindResource("Muted"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
             var pickRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
             var from = new ComboBox { Style = (Style)FindResource("Combo"), Width = 260 }; var to = new ComboBox { Style = (Style)FindResource("Combo"), Width = 260 };
             Func<BackupInfo, ComboBoxItem> item = b => new ComboBoxItem { Content = b == null ? "Your saves now" : b.When.ToString("ddd d MMM, HH:mm") + (string.IsNullOrEmpty(b.Reason) ? "" : "  (" + b.Reason + ")"), Tag = b };
@@ -1394,7 +1522,7 @@ namespace HallowVault
                 return r0 == null ? p : System.IO.Path.GetFileName(r0) + (p.Length > r0.Length ? p.Substring(r0.Length) : "");
             };
             var colors = new Dictionary<string, string> { { "added", "#6ED28C" }, { "removed", "#F07070" }, { "bigger", "#F0BE5A" }, { "smaller", "#F0BE5A" }, { "changed", "#A98BE0" } };
-            Action refresh = () =>
+            Action refresh = null; refresh = () =>
             {
                 lst.Children.Clear();
                 var a = from.SelectedItem as ComboBoxItem; var b = to.SelectedItem as ComboBoxItem; if (a == null || b == null) return;
@@ -1409,14 +1537,51 @@ namespace HallowVault
                     if (cnt("bigger") > 0) parts.Add(cnt("bigger") + " bigger"); if (cnt("smaller") > 0) parts.Add(cnt("smaller") + " smaller");
                     if (cnt("changed") > 0) parts.Add(cnt("changed") + " saved again (same size)");
                     sum.Text = ch.Count == 0 ? "No differences - " + same + (same == 1 ? " file is" : " files are") + " the same." : string.Join(", ", parts) + "   \u00B7   " + same + " the same";
+                    var src = (BackupInfo)a.Tag; var vsNow = b.Tag == null;
+                    if (vsNow && ch.Count > 0)   // v1.13: what restoring this version would do
+                    {
+                        int back = cnt("removed"), over = cnt("bigger") + cnt("smaller") + cnt("changed"), stay = cnt("added");
+                        var what = new List<string>();
+                        if (back > 0) what.Add("bring back " + back + (back == 1 ? " file" : " files"));
+                        if (over > 0) what.Add("overwrite " + over + (over == 1 ? " file" : " files") + " with the backup's version");
+                        if (stay > 0) what.Add("leave " + stay + " newer " + (stay == 1 ? "file" : "files") + " alone (a restore never deletes)");
+                        if (what.Count > 0) sum.Text += "\nRestoring the whole version would " + string.Join(", ", what) + ".";
+                    }
+                    Func<DateTime?, string> tm = x => x == null || x.Value == Saves.RegTime ? "" : x.Value.ToString(x.Value.Year == DateTime.Now.Year ? "d MMM HH:mm" : "d MMM yyyy");
                     foreach (var c in ch.Take(400))
                     {
+                        var cc = c;
                         var d = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
-                        var tag = new TextBlock { Text = c.Kind, Width = 70, Foreground = B(colors[c.Kind]), FontWeight = FontWeights.SemiBold }; DockPanel.SetDock(tag, Dock.Left); d.Children.Add(tag);
-                        var size = new TextBlock { Width = 150, TextAlignment = TextAlignment.Right, Foreground = (Brush)FindResource("Muted"),
+                        var tag = new TextBlock { Text = c.Kind, Width = 70, Foreground = B(colors[c.Kind]), FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center }; DockPanel.SetDock(tag, Dock.Left); d.Children.Add(tag);
+                        var canPut = vsNow && c.Kind != "added" && !Reg.Is(System.IO.Path.GetDirectoryName(c.Path) ?? "") && !Reg.Is(c.Path);
+                        var one = new Button { Content = "Restore file", Style = (Style)FindResource("Btn"), Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(10, 0, 0, 0), Width = 118, Visibility = canPut ? Visibility.Visible : Visibility.Hidden,
+                            ToolTip = "Put back just this file from " + src.When.ToString("d MMM HH:mm") + " (your saves are backed up first)" };
+                        one.Click += (s2, e2) =>
+                        {
+                            if (Running(g)) { MessageBox.Show(w, "Close " + g.Name + " first - a running game would overwrite the restored file.", "Restore file", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+                            if (MessageBox.Show(w, "Put back " + System.IO.Path.GetFileName(cc.Path) + " from " + src.When.ToString("dddd d MMM, HH:mm") + "?\n\n" + cc.Path + "\n\nYour current saves are backed up first.", "Restore file", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                            try
+                            {
+                                SafetyBackup(g, "before restoring a file");
+                                if (!Backups.RestoreFile(src, cc.Path)) { MessageBox.Show(w, "That backup doesn't have this file.", "Restore file"); return; }
+                                Log.Add(g.Name, "restored one file from the version of " + src.When.ToString("yyyy-MM-dd HH:mm") + ": " + cc.Path + " (the saves from just before were backed up)");
+                                S.LastSig.Remove(g.Id); S.Save();
+                                rs = Saves.Find(g, steamUser, ExtraOf(g)); history[g.Id] = Backups.List(Root, g); if (!Snap.On) Fill();
+                                Status(System.IO.Path.GetFileName(cc.Path) + " put back for " + g.Name + " (from " + src.When.ToString("d MMM HH:mm") + "). Your saves from just before are kept as a backup too.");
+                                refresh();
+                            }
+                            catch (Exception ex) { MessageBox.Show(w, "Couldn't restore that file: " + ex.Message, "Restore file"); }
+                        };
+                        DockPanel.SetDock(one, Dock.Right); d.Children.Add(one);
+                        var size = new TextBlock { Width = 130, TextAlignment = TextAlignment.Right, Foreground = (Brush)FindResource("Muted"), VerticalAlignment = VerticalAlignment.Center,
                             Text = c.Old < 0 ? VaultSettings.Size(c.New) : c.New < 0 ? VaultSettings.Size(c.Old) : c.Old == c.New ? VaultSettings.Size(c.New) : VaultSettings.Size(c.Old) + " \u2192 " + VaultSettings.Size(c.New) };
                         DockPanel.SetDock(size, Dock.Right); d.Children.Add(size);
-                        d.Children.Add(new TextBlock { Text = shortName(c.Path), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = c.Path });
+                        var t1 = tm(c.OldWhen); var t2 = tm(c.NewWhen);
+                        if (t1.Length > 0 && t1 == t2) { t1 = c.OldWhen.Value.ToString("d MMM HH:mm:ss"); t2 = c.NewWhen.Value.ToString("HH:mm:ss"); }   // saved again the same minute
+                        var times = new TextBlock { Width = 200, TextAlignment = TextAlignment.Right, Foreground = (Brush)FindResource("Muted"), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
+                            Text = t1.Length > 0 && t2.Length > 0 && t1 != t2 ? t1 + " \u2192 " + t2 : t1.Length > 0 ? t1 : t2, ToolTip = "When the file was last saved" + (t1.Length > 0 && t2.Length > 0 ? " (in the older version \u2192 in the newer one)" : "") };
+                        DockPanel.SetDock(times, Dock.Right); d.Children.Add(times);
+                        d.Children.Add(new TextBlock { Text = shortName(c.Path), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = c.Path, VerticalAlignment = VerticalAlignment.Center });
                         lst.Children.Add(d);
                     }
                     if (ch.Count > 400) lst.Children.Add(new TextBlock { Text = "... and " + (ch.Count - 400) + " more", Foreground = (Brush)FindResource("Muted") });
@@ -1459,7 +1624,7 @@ namespace HallowVault
 
         public void SnapAll(string dir)
         {
-            if (!string.IsNullOrEmpty(S.CopyDir)) { copyState = Backups.CopyState(Root, S.CopyDir); ShowCopyState(); Fill(); }
+            if (!string.IsNullOrEmpty(S.CopyDir)) { copyState = Backups.CopyState(Root, S.CopyDir, S.CopyKeep); ShowCopyState(); Fill(); }
             Snap.Save(this, System.IO.Path.Combine(dir, "main.png"), 1060, 740);
             settingsPanel.Visibility = Visibility.Visible; Snap.Save(this, System.IO.Path.Combine(dir, "settings.png"), 1060, 740);
             var ssv = settingsPanel.Child as ScrollViewer; if (ssv != null) { ssv.ScrollToEnd(); ssv.UpdateLayout(); Snap.Save(this, System.IO.Path.Combine(dir, "settings-end.png"), 1060, 740); ssv.ScrollToEnd(); ssv.UpdateLayout(); Snap.Save(this, System.IO.Path.Combine(dir, "settings-end.png"), 1060, 740); }

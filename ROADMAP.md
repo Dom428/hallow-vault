@@ -17,6 +17,7 @@
 | **1.10** | Second copy status (up to date / behind / unreachable), automatic catch-up, cloud sync conflict copies spotted |
 | **1.11** | Online save database: Ludusavi's manifest (from PCGamingWiki) downloaded and re-checked weekly, parsed by a small YAML reader into a cached index; its paths and HKCU keys go first, Vault's finders add the rest |
 | **1.12** | Check backups (every zip opens, CRC-32s and sizes match, the file list recorded in each backup's vault.json matches; green / amber / red per game; weekly check, off by default; read-only); Add a game (name, save folders, optional .exe for the game-closed backup; editable, removing keeps its backups) |
+| **1.13** | Second copy to any folder or NAS share (typed `\\NAS\share` paths), every copy checked by SHA-256 (`sha256.txt`), its own retention, Verify copies (Settings, weekly, pipe `verify`; damaged copies replaced from the vault); restore Preview (sizes and times per file, what a restore would do) and Restore file (one file, after a safety backup); a built-in list of common save places (My Games, Saved Games, LocalLow\<company>, AppData); Steam Cloud shown per game; backup health in status.json (`lastBackupAt`, `lastBackupOk`, `failingGames`, per-game `lastResult`) |
 
 ## Next
 
@@ -27,10 +28,11 @@ Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = ca
 - **Scheduled backups:** buildable here - 1.9 (Ludusavi leaves scheduling to Task Scheduler; GameSave Manager makes scheduled tasks).
 - **Compression choice:** buildable here - 1.9 (zip level; Ludusavi also offers other zip methods, which Windows' built-in zip can't make).
 - **Filters / exclusions per game:** buildable here - 1.9.
-- **Cloud upload (rclone, many providers):** not buildable here - needs accounts and a downloaded tool; Vault's second copy into a synced folder covers OneDrive / Google Drive / Dropbox. 1.10 makes it trustworthy (behind / conflicts).
+- **Cloud upload (rclone, many providers):** not buildable here - needs accounts and a downloaded tool; Vault's second copy into a synced folder covers OneDrive / Google Drive / Dropbox. 1.10 makes it trustworthy (behind / conflicts); 1.13 adds NAS shares, SHA-256 checked copies, Verify and its own retention.
 - **Differential backups (full + changes):** buildable, later - Vault's per-version zips are simpler to restore and saves are small.
 - **Backup validation (check every zip opens and matches):** buildable here - 1.12 (Check backups: opens, CRC-32s, the recorded file list; red / amber / green; weekly, off by default; read-only).
 - **Redirects (restore to a different folder or drive):** partly done - 1.7's import re-maps folders between PCs.
+- **Restore one file / preview a restore:** buildable here - 1.13 (Preview with sizes and times, Restore file after a safety backup).
 - **Custom games / your own entries:** done - Add folder on any game; 1.12 adds games no launcher knows (Add a game: name, save folders, optional .exe).
 - **Launch wrapping (back up after a game run from a launcher):** not needed - Vault watches running games itself.
 - **Steam screenshots, Proton / Wine, Steam Deck, Heroic / Lutris:** not buildable here - Windows-only app, no Linux PC to test on.
@@ -44,3 +46,6 @@ Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = ca
 - How Vault could use it: on the user's OK, download it once (and check for a newer one weekly, with its SHA from GitHub), parse the YAML into a cached index by Steam id and name (the Windows paths only), and use it as one more source in Find. Needs a small YAML reader (no YAML library in .NET Framework).
 ### Later
 - Fixes from real use: check the game-closed backup after real game sessions
+- NAS second copy live: the user's UGREEN NAS is paused for now - when it's back, type its share in Settings > Second copy (nothing NAS-specific is needed)
+- Steam Cloud: per-game cloud on/off from Steam's own settings (now: a synced file in any account's cloud cache)
+- Dedupe between versions (store unchanged files once) - only if vaults grow big; saves are small and plain zips are simpler to restore
