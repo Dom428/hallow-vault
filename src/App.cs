@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.14.0.0")]
-[assembly: AssemblyFileVersion("1.14.0.0")]
+[assembly: AssemblyVersion("1.15.0.0")]
+[assembly: AssemblyFileVersion("1.15.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.14";
+        public const string Version = "1.15";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -63,7 +63,8 @@ namespace HallowVault
     public class VaultWindow : Window
     {
         static Color C(string hex) { return (Color)ColorConverter.ConvertFromString(hex); }
-        static SolidColorBrush B(string hex) { return new SolidColorBrush(C(Look.Map(hex))); }   // v1.14: written with the dark values, swapped for the light ones in light mode
+        static SolidColorBrush B(string hex) { return Look.B(hex); }   // v1.14: written with the dark values, swapped for the light ones in light mode (v1.15: tagged, so open windows recolour)
+        static SolidColorBrush T(string hex) { return Look.T(hex); }   // v1.15: the same colour as small text (darker green / amber on light)
 
         readonly VaultSettings S = VaultSettings.Load();
         readonly bool startHidden; bool exiting, toldTray;
@@ -163,7 +164,10 @@ namespace HallowVault
         {
             var want = Accent.Want(S.UseHallowAccent); var light = Look.Want(S.Look);
             if (string.Equals(want, Accent.Current, StringComparison.OrdinalIgnoreCase) && light == Accent.CurrentLight) return;
+            var oldDict = Accent.Dict;
             Accent.Apply(Application.Current, want, light);
+            // v1.15: windows that are already open (dialogs, What's new, the backup check) are recoloured in place - nothing typed is lost
+            foreach (Window ow in Application.Current.Windows) if (ow != this) { try { Look.Restyle(ow, oldDict, Accent.Dict); } catch { } }
             Background = (Brush)FindResource("Bg"); Foreground = (Brush)FindResource("Text"); Look.TitleBar(this);
             var open = settingsPanel != null && settingsPanel.Visibility == Visibility.Visible; var msg = status == null ? null : status.Text;
             Content = Build(); Fill();
@@ -202,9 +206,9 @@ namespace HallowVault
         {
             if (manState == null) return;
             if (!S.UseManifest) { manState.Text = "Off - Vault uses only its own detection."; manState.Foreground = (Brush)FindResource("Muted"); return; }
-            if (manChecking && !Manifest.Loaded) { manState.Text = "Downloading the save database..."; manState.Foreground = B("#F0BE5A"); return; }
-            if (!Manifest.Loaded) { manState.Text = "Not downloaded yet - Vault uses its own detection until it is."; manState.Foreground = B("#F0BE5A"); return; }
-            manState.Text = Manifest.Count.ToString("N0") + " games  \u00B7  updated " + VaultSettings.Ago(Manifest.Updated) + (manChecking ? "  \u00B7  checking for a newer one..." : ""); manState.Foreground = B("#6ED28C");
+            if (manChecking && !Manifest.Loaded) { manState.Text = "Downloading the save database..."; manState.Foreground = T("#F0BE5A"); return; }
+            if (!Manifest.Loaded) { manState.Text = "Not downloaded yet - Vault uses its own detection until it is."; manState.Foreground = T("#F0BE5A"); return; }
+            manState.Text = Manifest.Count.ToString("N0") + " games  \u00B7  updated " + VaultSettings.Ago(Manifest.Updated) + (manChecking ? "  \u00B7  checking for a newer one..." : ""); manState.Foreground = T("#6ED28C");
         }
         // first run: download; then once a week: re-download only when GitHub's sha changed. A failure keeps the old copy.
         void CheckManifest(bool now)
@@ -306,19 +310,19 @@ namespace HallowVault
             var e = new System.Windows.Shapes.Ellipse { Width = 9, Height = 9, Fill = B(Checker.Colors[level]), Margin = new Thickness(9, 2, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             var host = new Border { Background = Brushes.Transparent, ToolTip = "Backup check " + VaultSettings.Ago(when) + ": " + sum + (level > 0 ? " (Check backups for details)" : "") };
             if (level == 0) host.Child = e;
-            else host.Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { e, new TextBlock { Text = Checker.Words[level], FontSize = 10.5, Foreground = B(Checker.Colors[level]), Margin = new Thickness(5, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center } } };
+            else host.Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { e, new TextBlock { Text = Checker.Words[level], FontSize = 10.5, Foreground = T(Checker.Colors[level]), Margin = new Thickness(5, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center } } };
             return host;
         }
         void ShowCheckState()
         {
             if (checkState == null) return;
-            if (checking) { checkState.Text = checkProgress; checkState.Foreground = B("#F0BE5A"); return; }
+            if (checking) { checkState.Text = checkProgress; checkState.Foreground = T("#F0BE5A"); return; }
             DateTime last;
             if (!DateTime.TryParse(S.LastCheck, out last)) { checkState.Text = "Not checked yet."; checkState.Foreground = (Brush)FindResource("Muted"); return; }
             int red = 0, amber = 0, n = 0;
             foreach (var v in S.Checks.Values) { int l; DateTime w; string su; if (Checker.Unpack(v, out l, out w, out su)) { n++; if (l == 2) red++; else if (l == 1) amber++; } }
-            if (red + amber == 0) { checkState.Text = "Last check " + VaultSettings.Ago(last) + ": " + (n == 1 ? "1 game's backups fine." : "all " + n + " games' backups fine."); checkState.Foreground = B(Checker.Colors[0]); }
-            else { checkState.Text = "Last check " + VaultSettings.Ago(last) + ": " + (red > 0 ? red + (red == 1 ? " game has" : " games have") + " damaged backups" : "") + (red > 0 && amber > 0 ? ", " : "") + (amber > 0 ? amber + (amber == 1 ? " game needs" : " games need") + " a look" : "") + " - Check all now for details."; checkState.Foreground = B(Checker.Colors[red > 0 ? 2 : 1]); }
+            if (red + amber == 0) { checkState.Text = "Last check " + VaultSettings.Ago(last) + ": " + (n == 1 ? "1 game's backups fine." : "all " + n + " games' backups fine."); checkState.Foreground = T(Checker.Colors[0]); }
+            else { checkState.Text = "Last check " + VaultSettings.Ago(last) + ": " + (red > 0 ? red + (red == 1 ? " game has" : " games have") + " damaged backups" : "") + (red > 0 && amber > 0 ? ", " : "") + (amber > 0 ? amber + (amber == 1 ? " game needs" : " games need") + " a look" : "") + " - Check all now for details."; checkState.Foreground = T(Checker.Colors[red > 0 ? 2 : 1]); }
         }
         void ShowCheckWindow()
         {
@@ -345,11 +349,11 @@ namespace HallowVault
         {
             if (checkBody == null) return;
             checkBody.Children.Clear();
-            if (checking) { checkBody.Children.Add(new TextBlock { Text = checkProgress, Foreground = B("#F0BE5A"), FontWeight = FontWeights.SemiBold }); return; }
+            if (checking) { checkBody.Children.Add(new TextBlock { Text = checkProgress, Foreground = T("#F0BE5A"), FontWeight = FontWeights.SemiBold }); return; }
             var res = checkResults;
             if (res == null) { checkBody.Children.Add(new TextBlock { Text = "Not checked yet.", Foreground = (Brush)FindResource("Muted") }); return; }
             var head = new TextBlock { Text = CheckMessage(res, checkScope == null ? null : new Game { Name = res.Count > 0 ? res[0].Name : "This game" }), FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
-                Foreground = B(Checker.Colors[res.Count == 0 ? 0 : Math.Max(0, res.Max(f => f.Level))]) };
+                Foreground = T(Checker.Colors[res.Count == 0 ? 0 : Math.Max(0, res.Max(f => f.Level))]) };
             checkBody.Children.Add(head);
             var lst = new StackPanel();
             foreach (var f in res.OrderByDescending(x => x.Level).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
@@ -359,7 +363,7 @@ namespace HallowVault
                 var dot = new System.Windows.Shapes.Ellipse { Width = 10, Height = 10, Fill = B(Checker.Colors[lv]), Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
                 DockPanel.SetDock(dot, Dock.Left); d.Children.Add(dot);
                 var nm = new TextBlock { Text = f.Name, FontWeight = FontWeights.SemiBold, Width = 210, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = f.Dir }; DockPanel.SetDock(nm, Dock.Left); d.Children.Add(nm);
-                d.Children.Add(new TextBlock { Text = f.Summary, TextWrapping = TextWrapping.Wrap, Foreground = lv == 0 ? (Brush)FindResource("Muted") : B(Checker.Colors[lv]) });
+                d.Children.Add(new TextBlock { Text = f.Summary, TextWrapping = TextWrapping.Wrap, Foreground = lv == 0 ? (Brush)FindResource("Muted") : T(Checker.Colors[lv]) });
                 lst.Children.Add(d);
                 foreach (var z in f.Zips.Where(x => x.Level > 0))
                 {
@@ -369,7 +373,7 @@ namespace HallowVault
                     DockPanel.SetDock(show, Dock.Right); zd.Children.Add(show);
                     var bi = System.IO.Path.GetFileNameWithoutExtension(z.File); DateTime made;
                     var label = DateTime.TryParseExact(bi, "yyyy-MM-dd HH.mm.ss", null, System.Globalization.DateTimeStyles.None, out made) ? made.ToString("d MMM yyyy, HH:mm") : System.IO.Path.GetFileName(z.File);
-                    zd.Children.Add(new TextBlock { Text = label + " - " + Checker.Words[z.Level] + ": " + z.Note, TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = B(Checker.Colors[z.Level]) });
+                    zd.Children.Add(new TextBlock { Text = label + " - " + Checker.Words[z.Level] + ": " + z.Note, TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = T(Checker.Colors[z.Level]) });
                     lst.Children.Add(zd);
                 }
             }
@@ -403,7 +407,7 @@ namespace HallowVault
                     rm.Click += (s, e) => { folders.Remove(ff); redraw(); };
                     DockPanel.SetDock(rm, Dock.Right); d.Children.Add(rm);
                     var there = Directory.Exists(ff) || File.Exists(ff);
-                    d.Children.Add(new TextBlock { Text = ff + (there ? "" : "   (not found)"), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = ff, VerticalAlignment = VerticalAlignment.Center, Foreground = there ? (Brush)FindResource("Text") : B("#F0BE5A") });
+                    d.Children.Add(new TextBlock { Text = ff + (there ? "" : "   (not found)"), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = ff, VerticalAlignment = VerticalAlignment.Center, Foreground = there ? (Brush)FindResource("Text") : T("#F0BE5A") });
                     fl.Children.Add(d);
                 }
             };
@@ -437,7 +441,7 @@ namespace HallowVault
             showExe();
             DockPanel.SetDock(clear, Dock.Right); exeRow.Children.Add(clear); DockPanel.SetDock(pickExe, Dock.Right); exeRow.Children.Add(pickExe); exeRow.Children.Add(exeText); sp.Children.Add(exeRow);
             sp.Children.Add(new TextBlock { Text = "With its program, Vault notices when the game is running and backs up a few seconds after it closes - only that exact .exe counts.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
-            var err = new TextBlock { Foreground = B("#F07070"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0), Visibility = Visibility.Collapsed }; sp.Children.Add(err);
+            var err = new TextBlock { Foreground = T("#F07070"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0), Visibility = Visibility.Collapsed }; sp.Children.Add(err);
             var row = new DockPanel { Margin = new Thickness(0, 14, 0, 0) };
             if (c != null)
             {
@@ -495,7 +499,7 @@ namespace HallowVault
                 var t = new TextBlock { Text = l[0].Length >= 16 ? l[0].Substring(5, 11) : l[0], Width = 92, Foreground = (Brush)FindResource("Muted") }; DockPanel.SetDock(t, Dock.Left); d.Children.Add(t);
                 var gname = new TextBlock { Text = l[1], Width = 150, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis }; DockPanel.SetDock(gname, Dock.Left); d.Children.Add(gname);
                 var what = l[2]; var col = what.StartsWith("backed up") || what.StartsWith("restored") || what.StartsWith("imported") ? "#6ED28C" : what.StartsWith("refused") || what.StartsWith("failed") ? "#F07070" : what.StartsWith("waiting") ? "#F0BE5A" : null;
-                d.Children.Add(new TextBlock { Text = what, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = what, Foreground = col == null ? (Brush)FindResource("Muted") : B(col) });
+                d.Children.Add(new TextBlock { Text = what, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = what, Foreground = col == null ? (Brush)FindResource("Muted") : T(col) });
                 lst.Children.Add(d);
             }
             sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 440, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
@@ -1125,7 +1129,7 @@ namespace HallowVault
             else if (c.Behind > 0) { text = c.Behind + (c.Behind == 1 ? " backup isn't" : " backups aren't") + " in the second copy yet" + (c.Error != null ? " (" + c.Error + ")" : "") + " - it keeps trying."; col = "#F0BE5A"; }
             else { text = "Up to date" + (c.Last != null ? " - last copy " + VaultSettings.Ago(c.Last) : "") + "."; col = "#6ED28C"; }
             if (c.Conflicts.Count > 0) { text += " " + c.Conflicts.Count + (c.Conflicts.Count == 1 ? " sync conflict copy (made by your cloud app) is" : " sync conflict copies (made by your cloud app) are") + " in it - your backups are fine; you can delete those."; if (col == "#6ED28C") col = "#F0BE5A"; }
-            copyText.Text = text; copyText.Foreground = B(col); copyShow.Visibility = c.Conflicts.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            copyText.Text = text; copyText.Foreground = T(col); copyShow.Visibility = c.Conflicts.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
         string CopySummary()
         {
@@ -1184,7 +1188,7 @@ namespace HallowVault
             if (!ParseVerified(out when, out count, out bad, out repaired, out old)) { verifyText.Text = "New copies are checked as they're made. Verify reads every copy back."; verifyText.Foreground = (Brush)FindResource("Muted"); return; }
             when = when.ToLocalTime();
             verifyText.Text = "Verified " + VaultSettings.Ago(when) + ": " + (bad > 0 ? bad + " of " + count + (bad == 1 ? " copy doesn't" : " copies don't") + " match" : "all " + count + " copies match") + (repaired > 0 ? ", " + repaired + " copied again" : "") + (old > 0 ? " (" + old + " too old to check)" : "") + ".";
-            verifyText.Foreground = B(bad > 0 ? "#F07070" : "#6ED28C");
+            verifyText.Foreground = T(bad > 0 ? "#F07070" : "#6ED28C");
         }
 
         // ================================================================ data -> screen
@@ -1234,7 +1238,7 @@ namespace HallowVault
         }
         FrameworkElement Label(string t)
         {
-            return new TextBlock { Text = t, FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = B("#A98BE0"), Margin = new Thickness(2, 14, 0, 8) };
+            return new TextBlock { Text = t, FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = T("#A98BE0"), Margin = new Thickness(2, 14, 0, 8) };
         }
 
         static readonly Dictionary<string, ImageSource> imgCache = new Dictionary<string, ImageSource>();
@@ -1295,7 +1299,7 @@ namespace HallowVault
             var pinned = hs.Count(x => x.Pinned); string alarm; S.Alarms.TryGetValue(g.Id, out alarm);
             var when = new TextBlock { Width = 150, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right, Margin = new Thickness(0, 0, 8, 0),
                 Text = alarm != null ? "saves look damaged" : rs.Count == 0 ? "" : off ? "turned off" : hs.Count == 0 ? "not backed up yet" : "backed up " + VaultSettings.Ago(last),
-                Foreground = alarm != null ? B("#F07070") : hs.Count == 0 && rs.Count > 0 && !off ? B("#F0BE5A") : (Brush)FindResource("Muted"), FontWeight = alarm != null ? FontWeights.SemiBold : FontWeights.Normal,
+                Foreground = alarm != null ? T("#F07070") : hs.Count == 0 && rs.Count > 0 && !off ? T("#F0BE5A") : (Brush)FindResource("Muted"), FontWeight = alarm != null ? FontWeights.SemiBold : FontWeights.Normal,
                 ToolTip = alarm != null ? AlarmText(g, alarm) : hs.Count == 0 ? null : hs.Count + (hs.Count == 1 ? " backup" : " backups") + (pinned > 0 ? " (" + pinned + " pinned)" : "") + ", " + VaultSettings.Size(hs.Sum(x => x.Bytes)) };
             if (alarm != null && rs.Count == 0)   // the folder is gone: still offer Restore
             {
@@ -1497,7 +1501,7 @@ namespace HallowVault
                 DockPanel.SetDock(pin, Dock.Right); r.Children.Add(pin);
                 t.Children.Add(new TextBlock { Text = VaultSettings.Ago(bb.When) + "   ·   " + VaultSettings.Size(bb.Bytes) + "   ·   " + (bb.Reason ?? ""), Foreground = (Brush)FindResource("Muted"), FontSize = 11.5 });
                 ZipCheck zc; if (zipChecks.TryGetValue(bb.File, out zc) && zc.Level > 0)   // v1.12: what the last check found
-                    t.Children.Add(new TextBlock { Text = "Check: " + Checker.Words[zc.Level] + " - " + zc.Note, Foreground = B(Checker.Colors[zc.Level]), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, MaxWidth = 330 });
+                    t.Children.Add(new TextBlock { Text = "Check: " + Checker.Words[zc.Level] + " - " + zc.Note, Foreground = T(Checker.Colors[zc.Level]), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, MaxWidth = 330 });
                 r.Children.Add(t); lst.Children.Add(r);
             }
             sp.Children.Add(new ScrollViewer { Content = lst, MaxHeight = 420, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
@@ -1562,7 +1566,7 @@ namespace HallowVault
                     {
                         var cc = c;
                         var d = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
-                        var tag = new TextBlock { Text = c.Kind, Width = 70, Foreground = B(colors[c.Kind]), FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center }; DockPanel.SetDock(tag, Dock.Left); d.Children.Add(tag);
+                        var tag = new TextBlock { Text = c.Kind, Width = 70, Foreground = T(colors[c.Kind]), FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center }; DockPanel.SetDock(tag, Dock.Left); d.Children.Add(tag);
                         var canPut = vsNow && c.Kind != "added" && !Reg.Is(System.IO.Path.GetDirectoryName(c.Path) ?? "") && !Reg.Is(c.Path);
                         var one = new Button { Content = "Restore file", Style = (Style)FindResource("Btn"), Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(10, 0, 0, 0), Width = 118, Visibility = canPut ? Visibility.Visible : Visibility.Hidden,
                             ToolTip = "Put back just this file from " + src.When.ToString("d MMM HH:mm") + " (your saves are backed up first)" };
@@ -1668,19 +1672,75 @@ namespace HallowVault
         {
             var to = Environment.GetEnvironmentVariable("HALLOW_SNAP_LIVE");
             if (Link.TestDir == null || string.IsNullOrEmpty(to)) return;
-            var before = Accent.CurrentLight; bool done = false;
-            Accent.Watch(Dispatcher, () => { ApplyAccent(); if (Accent.CurrentLight != before) done = true; });
+            var before = Accent.CurrentLight; var beforeAccent = Accent.Current; int changes = 0;
+            Accent.Watch(Dispatcher, () => { ApplyAccent(); changes++; });
             Directory.CreateDirectory(Accent.Folder);
             var file = System.IO.Path.Combine(Accent.Folder, "theme.json"); var old = Accent.ReadTheme() ?? "{}";
             var t = System.Text.RegularExpressions.Regex.Replace(old, "\"mode\"\\s*:\\s*\"[^\"]*\"", "\"mode\": \"" + to + "\"");
             if (t == old) t = old.TrimEnd().TrimEnd('}') + (old.Contains(":") ? ", " : "") + "\"mode\": \"" + to + "\" }";
             var until = DateTime.Now.AddSeconds(1);
             while (DateTime.Now < until) { DoEvents(); Thread.Sleep(20); }
+            // v1.15: dialogs that are open while the look changes (one with something typed in it)
+            const string typed = "Typed before the switch";
+            Func<Dictionary<string, Window>> open = () =>
+            {
+                var d = new Dictionary<string, Window>();
+                d["addgame"] = BuildCustom(null, this); d["log"] = BuildLog(this); d["whatsnew"] = new WhatsNewWindow(WhatsNew.Since("1.12"));
+                ApplyCheck(null, Checker.All(Root, FolderNames(Root))); d["check"] = BuildCheck(this); checkBody = null;
+                var g = games.FirstOrDefault(x => history.ContainsKey(x.Id) && history[x.Id].Count >= 2);
+                if (g != null) { d["restore"] = BuildRestore(g); var hs = history[g.Id]; d["compare"] = BuildCompare(g, hs, hs[hs.Count - 1], this); }
+                var tb = FirstTextBox(d["addgame"]); if (tb != null) tb.Text = typed;
+                return d;
+            };
+            var live = open();
+            var report = new List<string>();
+            Action<string> compare = phase =>
+            {
+                var fresh = open();
+                foreach (var k in live.Keys)
+                {
+                    string a = System.IO.Path.Combine(dir, k + "-" + phase + "-live.png"), b = System.IO.Path.Combine(dir, k + "-" + phase + "-fresh.png");
+                    Snap.Save(live[k], a, live[k].Width, 0); Snap.Save(fresh[k], b, fresh[k].Width, 0);
+                    int diff = PixelDiff(a, b);
+                    report.Add((diff == 0 ? "SAME " : "DIFFERENT ") + phase + " " + k + ": the open window vs one opened after the change" + (diff == 0 ? "" : " (" + diff + " pixels differ)"));
+                    if (diff == 0) { File.Delete(b); }
+                }
+                foreach (var w in fresh.Values) w.Close();
+                var tb = FirstTextBox(live["addgame"]); report.Add((tb != null && tb.Text == typed ? "KEPT " : "LOST ") + phase + " addgame: text typed before the change");
+            };
             File.WriteAllText(file + ".tmp", t); if (File.Exists(file)) File.Replace(file + ".tmp", file, null); else File.Move(file + ".tmp", file);
             until = DateTime.Now.AddSeconds(15);
-            while (!done && DateTime.Now < until) { DoEvents(); Thread.Sleep(20); }
-            File.WriteAllText(System.IO.Path.Combine(dir, "live.txt"), (done ? "switched " : "NOT switched ") + (before ? "light" : "dark") + " -> " + (Accent.CurrentLight ? "light" : "dark"));
+            while (Accent.CurrentLight == before && DateTime.Now < until) { DoEvents(); Thread.Sleep(20); }
+            var done = Accent.CurrentLight != before;
+            report.Insert(0, (done ? "switched " : "NOT switched ") + (before ? "light" : "dark") + " -> " + (Accent.CurrentLight ? "light" : "dark"));
             Snap.Save(this, System.IO.Path.Combine(dir, "main-live.png"), 1060, 740);
+            compare("mode");
+            // then the accent changes while they are still open
+            var acc = string.Equals(beforeAccent, "#EAB308", StringComparison.OrdinalIgnoreCase) ? "#22C55E" : "#EAB308";
+            var t2 = System.Text.RegularExpressions.Regex.Replace(t, "\"accent\"\\s*:\\s*\"[^\"]*\"", "\"accent\": \"" + acc + "\"");
+            if (t2 == t) t2 = t.TrimEnd().TrimEnd('}') + ", \"accent\": \"" + acc + "\" }";
+            File.WriteAllText(file + ".tmp", t2); File.Replace(file + ".tmp", file, null);
+            until = DateTime.Now.AddSeconds(15);
+            while (!string.Equals(Accent.Current, acc, StringComparison.OrdinalIgnoreCase) && DateTime.Now < until) { DoEvents(); Thread.Sleep(20); }
+            report.Add((string.Equals(Accent.Current, acc, StringComparison.OrdinalIgnoreCase) ? "accent changed " : "accent NOT changed ") + beforeAccent + " -> " + Accent.Current);
+            compare("accent");
+            File.WriteAllLines(System.IO.Path.Combine(dir, "live.txt"), report);
+        }
+        static TextBox FirstTextBox(DependencyObject o)
+        {
+            if (o == null) return null; var t = o as TextBox; if (t != null) return t;
+            foreach (var c in LogicalTreeHelper.GetChildren(o)) { var r = FirstTextBox(c as DependencyObject); if (r != null) return r; }
+            return null;
+        }
+        static int PixelDiff(string a, string b)
+        {
+            Func<string, BitmapSource> load = p => { using (var s = File.OpenRead(p)) return BitmapFrame.Create(s, BitmapCreateOptions.None, BitmapCacheOption.OnLoad); };
+            var x = load(a); var y = load(b);
+            if (x.PixelWidth != y.PixelWidth || x.PixelHeight != y.PixelHeight) return int.MaxValue;
+            int stride = x.PixelWidth * 4; var px = new byte[stride * x.PixelHeight]; var py = new byte[px.Length];
+            new FormatConvertedBitmap(x, PixelFormats.Bgra32, null, 0).CopyPixels(px, stride, 0); new FormatConvertedBitmap(y, PixelFormats.Bgra32, null, 0).CopyPixels(py, stride, 0);
+            int n = 0; for (int i = 0; i < px.Length; i += 4) if (px[i] != py[i] || px[i + 1] != py[i + 1] || px[i + 2] != py[i + 2] || px[i + 3] != py[i + 3]) n++;
+            return n;
         }
         static void DoEvents()
         {

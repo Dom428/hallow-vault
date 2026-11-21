@@ -1,4 +1,4 @@
-﻿// Hallow Vault v1.14 - light and dark mode (Hallow family spec). %APPDATA%\Hallow\theme.json "mode": "dark" | "light" | "system"
+﻿// Hallow Vault v1.14 - light and dark mode (Hallow family spec; v1.15: readability fixes, open windows recoloured live). %APPDATA%\Hallow\theme.json "mode": "dark" | "light" | "system"
 // (written by Hallow Toolkit; missing / unknown / broken = dark), "system" = Windows' AppsUseLightTheme. Vault's own Settings > Look
 // (Follow Hallow / Light / Dark) wins over the family mode. Dark is the look Vault always had; light swaps the palette values only.
 using System;
@@ -99,15 +99,6 @@ namespace HallowVault
             double x = Luminance(Parse(a)), y = Luminance(Parse(b));
             return (Math.Max(x, y) + 0.05) / (Math.Min(x, y) + 0.05);
         }
-        static void ToHsl(Color c, out double h, out double s, out double l)
-        {
-            double r = c.R / 255.0, g = c.G / 255.0, b = c.B / 255.0, max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
-            l = (max + min) / 2; h = 0; s = 0;
-            if (max == min) return;
-            var d = max - min; s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-            if (max == r) h = (g - b) / d + (g < b ? 6 : 0); else if (max == g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
-            h /= 6;
-        }
         static double Hue(double p, double q, double t)
         {
             if (t < 0) t += 1; if (t > 1) t -= 1;
@@ -121,16 +112,99 @@ namespace HallowVault
             Func<double, byte> to = v => (byte)Math.Max(0, Math.Min(255, Math.Round(v * 255)));
             return Color.FromRgb(to(r), to(g), to(b));
         }
-        // the accent for text, thin lines and icons on light backgrounds: same hue and saturation, darker until >= 4.5:1 on white
-        public static string TextAccent(string accent)
+        // v1.15: the family rule (Hallow Toolkit 5.16's Get-LightTextAccent): the colour itself if it already has `min` contrast on `on`,
+        // else HSL (System.Drawing's hue / saturation / brightness) with the lightness lowered 0.01 at a time until it does
+        public static string Darken(string hex, double min, string on)
         {
-            var c = Parse(accent); double h, s, l; ToHsl(c, out h, out s, out l);
-            var hex = Hex(c);
-            while (Contrast(hex, "#FFFFFF") < 4.5 && l > 0) { l = Math.Max(0, l - 0.01); hex = Hex(FromHsl(h, s, l)); }
-            return hex;
+            var c = Parse(hex); var x = Hex(c);
+            if (Contrast(x, on) >= min) return x;
+            var d = System.Drawing.Color.FromArgb(c.R, c.G, c.B);
+            double h = d.GetHue() / 360.0, s = (double)d.GetSaturation(), l = (double)d.GetBrightness();
+            while (l > 0)
+            {
+                l = Math.Max(0.0, l - 0.01); x = Hex(FromHsl(h, s, l));
+                if (Contrast(x, on) >= min) break;
+            }
+            return x;
         }
-        // text on a filled accent button: the family's dark text or white, whichever reads better
-        public static string OnAccent(string accent) { return Contrast(accent, "#1E1A26") >= Contrast(accent, "#FFFFFF") ? "#1E1A26" : "#FFFFFF"; }
+        // the accent for text, thin lines and icons on light surfaces (v1.15: against Panel 2 #EEEAF5, the darkest one it sits on,
+        // so it also reads on the background #F6F4FA and on white)
+        public static string TextAccent(string accent) { return Darken(accent, 4.5, "#EEEAF5"); }
+        // text on a filled accent: the family's dark text or white, whichever reads better
+        public static string FillText(string fill) { return Contrast(fill, "#1E1A26") >= Contrast(fill, "#FFFFFF") ? "#1E1A26" : "#FFFFFF"; }
+        public static string OnAccent(string accent) { return FillText(accent); }
+        // v1.15: the light fill for accent buttons, chips and selected items: the accent itself if its text reaches 4.5:1,
+        // else the accent darkened until white text does (violet #8B5CF6: white text was 4.23:1)
+        public static string AccentFill(string accent) { return Contrast(accent, FillText(accent)) >= 4.5 ? Hex(Parse(accent)) : Darken(accent, 4.5, "#FFFFFF"); }
+        // the fill on hover: 0.9 per channel (rounded like Toolkit's [int])
+        public static string FillHover(string fill)
+        {
+            var c = Parse(fill); Func<byte, byte> dn = v => (byte)Math.Round(v * 0.9);
+            return Hex(Color.FromRgb(dn(c.R), dn(c.G), dn(c.B)));
+        }
+
+        // ---- v1.15: status colours as small TEXT on light (the icon values are just under 4.5:1 on white)
+        public static readonly Dictionary<string, string> LightText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "#6ED28C", "#1B7A44" },   // green
+            { "#F0BE5A", "#8F5B00" },   // amber
+        };
+        public static string MapText(string hex) { string l; return Light && hex != null && LightText.TryGetValue(hex, out l) ? l : Map(hex); }
+
+        // ---- v1.15: brushes that know what they are, so windows that are already open can be recoloured when the look or accent changes
+        static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Brush, string> tags = new System.Runtime.CompilerServices.ConditionalWeakTable<Brush, string>();
+        static SolidColorBrush Tag(string tag, string hex) { var b = new SolidColorBrush(Parse(hex)); tags.Add(b, tag); return b; }
+        // a colour written with its dark value (fills, icons, panels)
+        public static SolidColorBrush B(string darkHex) { return Tag("b" + darkHex, Map(darkHex)); }
+        // the same as small text (darker green / amber on light)
+        public static SolidColorBrush T(string darkHex) { return Tag("t" + darkHex, MapText(darkHex)); }
+        // the accent for text and icons
+        public static SolidColorBrush AccentText() { return Tag("a", Accent.CurrentLight ? TextAccent(Accent.Current) : Accent.Current); }
+        static Brush Remake(string tag)
+        {
+            if (tag == "a") return AccentText();
+            return tag[0] == 't' ? T(tag.Substring(1)) : B(tag.Substring(1));
+        }
+        // the brush for the look in use now, or null if this brush isn't one of ours
+        public static Brush Again(Brush b, Dictionary<object, object> oldKeys, ResourceDictionary now)
+        {
+            if (b == null) return null;
+            string tag; if (tags.TryGetValue(b, out tag)) return Remake(tag);
+            object key; if (oldKeys != null && oldKeys.TryGetValue(b, out key) && now != null && now.Contains(key)) return now[key] as Brush;
+            return null;
+        }
+        // recolours a window that is already open: its theme styles, theme brushes (FindResource) and our brushes, then the title bar
+        public static int Restyle(Window w, ResourceDictionary old, ResourceDictionary now)
+        {
+            var oldKeys = new Dictionary<object, object>();
+            if (old != null) foreach (var k in old.Keys) { var v = old[k]; if (v != null && !oldKeys.ContainsKey(v)) oldKeys[v] = k; }
+            var seen = new HashSet<DependencyObject>(); int n = 0;
+            Walk(w, oldKeys, now, seen, ref n);
+            TitleBar(w);
+            return n;
+        }
+        static void Walk(DependencyObject o, Dictionary<object, object> oldKeys, ResourceDictionary now, HashSet<DependencyObject> seen, ref int n)
+        {
+            if (o == null || !seen.Add(o)) return;
+            var fe = o as FrameworkElement;
+            object key;
+            if (fe != null && fe.Style != null && oldKeys.TryGetValue(fe.Style, out key) && now.Contains(key) && now[key] is Style) { fe.Style = (Style)now[key]; n++; }
+            var todo = new List<Tuple<DependencyProperty, Brush>>();
+            var e = o.GetLocalValueEnumerator();
+            while (e.MoveNext()) { var b = e.Current.Value as Brush; if (b != null) { var nb = Again(b, oldKeys, now); if (nb != null) todo.Add(Tuple.Create(e.Current.Property, nb)); } }
+            foreach (var t in todo) { if (!t.Item1.ReadOnly) { o.SetValue(t.Item1, t.Item2); n++; } }
+            foreach (var c in LogicalTreeHelper.GetChildren(o)) Walk(c as DependencyObject, oldKeys, now, seen, ref n);
+            if (o is Visual || o is System.Windows.Media.Media3D.Visual3D)
+            {
+                int cnt = 0; try { cnt = VisualTreeHelper.GetChildrenCount(o); } catch { }
+                for (int i = 0; i < cnt; i++) Walk(VisualTreeHelper.GetChild(o, i), oldKeys, now, seen, ref n);
+            }
+            if (fe != null)
+            {
+                if (fe.ContextMenu != null) Walk(fe.ContextMenu, oldKeys, now, seen, ref n);
+                var tip = fe.ToolTip as DependencyObject; if (tip != null) Walk(tip, oldKeys, now, seen, ref n);
+            }
+        }
 
         // ---- Windows' title bar (DWMWA_USE_IMMERSIVE_DARK_MODE = 20)
         [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);

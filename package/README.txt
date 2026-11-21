@@ -6,6 +6,11 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.15
+- Light mode readability fixes: green and amber status text, accent buttons (white text on a darker
+  fill for light accents like violet) and accent text are easier to read. Windows that are open
+  switch look and accent straight away.
+
 WHAT'S NEW IN 1.14
 - Light and dark mode. Vault follows the look you pick in Hallow Toolkit (Light, Dark or Same as
   Windows) and switches straight away. Settings > Look: Follow Hallow, Light or Dark just for Vault.

@@ -13,6 +13,7 @@ namespace HallowVault
     {
         // Newest first. One or two short lines per version.
         public static readonly Tuple<string, string[]>[] Notes = {
+            Tuple.Create("1.15", new[] { "Light mode readability fixes: green and amber status text, accent buttons (white text on a darker fill for light accents like violet) and accent text are easier to read", "Open windows switch look and accent straight away when you change them" }),
             Tuple.Create("1.14", new[] { "Light and dark mode: follows Hallow Toolkit's Light / Dark / Same as Windows, live", "Settings > Look: Follow Hallow, Light or Dark just for Vault" }),
             Tuple.Create("1.13", new[] { "Second copy to any folder - now also a NAS share you type in (\\\\NAS\\share). Every copy is read back and checked (SHA-256), it can keep its own number of versions, and Verify copies checks them all again", "Restore > Preview: what changed since a backup (sizes and times), and Restore file puts back just one file - your saves are backed up first", "Finds saves in more common places (My Games, Saved Games, LocalLow) and shows which games Steam Cloud already syncs" }),
             Tuple.Create("1.12", new[] { "Check backups (the heart button, or Settings): every zip must open and every file must match its checksum - green, amber or red per game. It only reads; a weekly check is in Settings (off by default)", "Add a game: back up a game no launcher knows - give it a name, its save folders and (optionally) its .exe. Edit or remove it any time; removing never deletes its backups" }),
@@ -41,7 +42,7 @@ namespace HallowVault
 
     public class WhatsNewWindow : Window
     {
-        static SolidColorBrush B(string hex) { return new SolidColorBrush((Color)ColorConverter.ConvertFromString(Look.Map(hex))); }
+        static SolidColorBrush B(string hex) { return Look.B(hex); }   // v1.15: tagged, so it recolours while open
         public WhatsNewWindow(List<Tuple<string, string[]>> items)
         {
             Title = "What's new in Hallow Vault"; Width = 560; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize;

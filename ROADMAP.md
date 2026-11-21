@@ -19,6 +19,7 @@
 | **1.12** | Check backups (every zip opens, CRC-32s and sizes match, the file list recorded in each backup's vault.json matches; green / amber / red per game; weekly check, off by default; read-only); Add a game (name, save folders, optional .exe for the game-closed backup; editable, removing keeps its backups) |
 | **1.13** | Second copy to any folder or NAS share (typed `\\NAS\share` paths), every copy checked by SHA-256 (`sha256.txt`), its own retention, Verify copies (Settings, weekly, pipe `verify`; damaged copies replaced from the vault); restore Preview (sizes and times per file, what a restore would do) and Restore file (one file, after a safety backup); a built-in list of common save places (My Games, Saved Games, LocalLow\<company>, AppData); Steam Cloud shown per game; backup health in status.json (`lastBackupAt`, `lastBackupOk`, `failingGames`, per-game `lastResult`) |
 | **1.14** | Light and dark mode (Hallow family spec): theme.json `mode` dark / light / system (Windows' AppsUseLightTheme, followed live), Settings > Look (Follow Hallow / Light / Dark) wins; the family light palette (same resource keys), accent darkened for text / icons (>= 4.5:1 on white), filled buttons keep the accent with the better of dark / white text; softer shadow; title bars follow; live through the theme.json watcher; `status` has `look` |
+| **1.15** | Light mode readability fixes: the family accent rule (Toolkit 5.16) - text accent >= 4.5:1 on #EEEAF5, filled accents with the better text colour or a darker fill with white text (violet), hover x0.9; green / amber status text #1B7A44 / #8F5B00 (icons keep #1E8E4F / #A66A00); open windows recoloured live on a look or accent change (theme styles, theme brushes and Vault's own brushes swapped in place); contrast test over every light pair and several accents |
 
 ## Next
 
@@ -47,7 +48,7 @@ Ludusavi (and GameSave Manager) do these; Vault doesn't yet. Buildable here = ca
 - How Vault could use it: on the user's OK, download it once (and check for a newer one weekly, with its SHA from GitHub), parse the YAML into a cached index by Steam id and name (the Windows paths only), and use it as one more source in Find. Needs a small YAML reader (no YAML library in .NET Framework).
 ### Later
 - Fixes from real use: check the game-closed backup after real game sessions
-- Light mode: green / amber status text is 3.8-4.5:1 on the light panels (the family palette) - a darker text shade if the family palette gets one; dialogs open during a live switch keep their look until they're opened again
+- ~~Light mode: green / amber status text is 3.8-4.5:1 on the light panels; dialogs open during a live switch keep their look until they're opened again~~ - done in 1.15
 - NAS second copy live: the user's UGREEN NAS is paused for now - when it's back, type its share in Settings > Second copy (nothing NAS-specific is needed)
 - Steam Cloud: per-game cloud on/off from Steam's own settings (now: a synced file in any account's cloud cache)
 - Dedupe between versions (store unchanged files once) - only if vaults grow big; saves are small and plain zips are simpler to restore

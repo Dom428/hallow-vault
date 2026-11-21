@@ -46,19 +46,32 @@ namespace HallowVault
             var d = (ResourceDictionary)XamlReader.Parse(ThemeXaml(xaml, accent, light));
             Look.Light = light;
             app.Resources.MergedDictionaries.Clear(); app.Resources.MergedDictionaries.Add(d);
-            Current = accent; CurrentLight = light;
+            Current = accent; CurrentLight = light; Dict = d;
         }
+        public static ResourceDictionary Dict;   // v1.15: the theme in use (to recolour windows that are open when it changes)
         public static string ThemeXaml(string xaml, string accent, bool light)
         {
             xaml = xaml.Replace("\r\n", "\n");
             if (light)
             {
                 xaml = Look.LightXaml(xaml);
-                // thin accent lines (caret, focused field) use the darker text accent; filled buttons keep the real one with readable text
-                var ta = Look.TextAccent(accent);
-                xaml = xaml.Replace("Property=\"CaretBrush\" Value=\"" + Own + "\"", "Property=\"CaretBrush\" Value=\"" + ta + "\"")
-                           .Replace("Property=\"BorderBrush\" Value=\"" + Own + "\"/></Trigger>", "Property=\"BorderBrush\" Value=\"" + ta + "\"/></Trigger>")
-                           .Replace("Value=\"#1A0E04\"", "Value=\"" + Look.OnAccent(accent) + "\"");
+                // thin accent lines (caret, focused field) use the darker text accent (v1.15: >= 4.5:1 on Panel 2 #EEEAF5);
+                // v1.15: filled accents (buttons, chips that are on) use the family fill rule - the accent, or darker with white text when
+                // neither text colour reaches 4.5:1 on it (violet) - with the fill's own text colour and a 0.9 hover
+                // (placeholders first, so the accent swap below can't touch them)
+                var ta = Look.TextAccent(accent); var fill = Look.AccentFill(accent);
+                xaml = xaml.Replace("Property=\"CaretBrush\" Value=\"" + Own + "\"", "Property=\"CaretBrush\" Value=\"@TA@\"")
+                           .Replace("Property=\"BorderBrush\" Value=\"" + Own + "\"/></Trigger>", "Property=\"BorderBrush\" Value=\"@TA@\"/></Trigger>")
+                           .Replace("<Setter Property=\"Background\" Value=\"" + Own + "\"/>\n        <Setter Property=\"BorderBrush\" Value=\"" + OwnLight + "\"/>",
+                                    "<Setter Property=\"Background\" Value=\"@FILL@\"/>\n        <Setter Property=\"BorderBrush\" Value=\"@FILL@\"/>")
+                           .Replace("<Setter Property=\"FontWeight\" Value=\"SemiBold\"/>\n    </Style>\n    <!-- On/off switch",
+                                    "<Setter Property=\"FontWeight\" Value=\"SemiBold\"/>\n        <Style.Triggers><Trigger Property=\"IsMouseOver\" Value=\"True\"><Setter Property=\"Background\" Value=\"@HOVER@\"/></Trigger></Style.Triggers>\n    </Style>\n    <!-- On/off switch")
+                           .Replace("x:Key=\"CheckedBg\" Color=\"" + Own + "\"", "x:Key=\"CheckedBg\" Color=\"@FILL@\"")
+                           .Replace("x:Key=\"CheckedLine\" Color=\"" + OwnLight + "\"", "x:Key=\"CheckedLine\" Color=\"@FILL@\"")
+                           .Replace("Value=\"#1A0E04\"", "Value=\"@ON@\"");
+                if (!string.Equals(accent, Own, StringComparison.OrdinalIgnoreCase))
+                    xaml = Regex.Replace(xaml, Own, accent, RegexOptions.IgnoreCase).Replace(OwnLight, Lighter(accent));
+                return xaml.Replace("@TA@", ta).Replace("@FILL@", fill).Replace("@HOVER@", Look.FillHover(fill)).Replace("@ON@", Look.FillText(fill));
             }
             if (!string.Equals(accent, Own, StringComparison.OrdinalIgnoreCase))
                 xaml = Regex.Replace(xaml, Own, accent, RegexOptions.IgnoreCase).Replace(OwnLight, Lighter(accent));
@@ -71,7 +84,7 @@ namespace HallowVault
             return string.Format("#{0:X2}{1:X2}{2:X2}", up(c.R), up(c.G), up(c.B));
         }
         // the accent for text and icons (v1.14: darker on light so it reads)
-        public static SolidColorBrush Brush() { return new SolidColorBrush((Color)ColorConverter.ConvertFromString(CurrentLight ? Look.TextAccent(Current) : Current)); }
+        public static SolidColorBrush Brush() { return Look.AccentText(); }   // v1.15: tagged, so open windows can be recoloured
 
         // calls `changed` (on the UI thread, 300 ms after the last change) whenever theme.json changes; the folder may appear later
         public static void Watch(System.Windows.Threading.Dispatcher ui, Action changed)
