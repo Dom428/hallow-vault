@@ -6,6 +6,10 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.14
+- Light and dark mode. Vault follows the look you pick in Hallow Toolkit (Light, Dark or Same as
+  Windows) and switches straight away. Settings > Look: Follow Hallow, Light or Dark just for Vault.
+
 WHAT'S NEW IN 1.13
 - Second copy to a NAS share too (type \\NAS\share\folder in Settings). Every copy is read back and
   checked (SHA-256), it can keep its own number of versions, and Verify copies checks them all again.
@@ -85,6 +89,7 @@ WHAT IT DOES
 - Works with Hallow Hub (each game's Saves on its page) and Hallow Remote (Back up now from your phone).
 - With Hallow Hub running, Vault lives in Hub's tray icon instead of its own (Settings > Use the Hallow icon).
 - Uses the Hallow accent colour picked in Hallow Toolkit. Crash reports stay on this PC (never sent).
+- Light or dark: follows Hallow Toolkit (Light / Dark / Same as Windows), or pick one in Settings > Look.
 - Pin a version so it's never pruned. Saves that suddenly shrink or vanish aren't backed up over.
 - New PC: Settings > Export on the old one, Import on the new one.
 - Games that keep settings in the registry (many Unity games) are backed up too.

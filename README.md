@@ -11,6 +11,7 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 - **Hallow family:** Hallow Hub's game pages show each game's Saves (last backup, Back up now, Restore) and Hallow Remote has Back up now on your phone. The link: Named pipe `HallowFamily.Vault.<user>` (`ping`, `status`, `backup <game>`, `backup all`, `restore <game>` opens the restore window, `check <game>` / `check all` (1.12), `verify` (1.13: re-checks the second copy); current user only), `HallowVault.exe --cmd "backup all"` for scripts and Stream Deck, and `%APPDATA%\HallowVault\status.json`.
 - **One Hallow icon:** while Hallow Hub hosts the family tray menu, Vault hides its own icon and its actions (Back up everything now, Restore..., Open the vault folder, Back up when a game closes) are in Hub's menu; its messages show from Hub's icon. Pipe commands `open`, `menu`, `invoke <id>`, `quit`. Settings > Use the Hallow icon (on by default); without Hub, Vault keeps its own icon.
 - **Hallow accent:** uses the family accent colour from `%APPDATA%\Hallow\theme.json` (picked in Hallow Toolkit), live; Settings > Use the Hallow accent colour.
+- **Light and dark mode (1.14):** follows theme.json's `mode` (`dark` / `light` / `system`, written by Hallow Toolkit; missing or unknown = dark), live - `system` follows Windows' app mode (`AppsUseLightTheme`). **Settings > Look:** Follow Hallow (default), Light or Dark just for Vault (wins over the family mode). The light look uses the Hallow family light palette; the accent is darkened for text and icons so it reads on white, filled buttons keep the real accent. Title bars follow too. `status` has `look`.
 - **Crash reports** stay on this PC (`%APPDATA%\HallowVault\crashes`, newest 20; no settings or file contents) with a notice next time; `status` has `lastCrash`.
 - **Pins:** pin a version in Restore and it's never pruned or removed by size limits (`pins.txt` next to the zips, copied with the second copy; pipe `pin <game>` / `unpin <game>`).
 - **Save alarm:** if a game's saves vanish, empty or shrink under half of the last backup, Vault doesn't back them up over the good ones and tells you (through Hallow Hub's icon when it hosts it), with Restore one click away.
@@ -37,6 +38,7 @@ Backs up your game saves and settings - part of the Hallow family with [Hallow H
 | `failingGames` | `[{ "name", "why" }]` - games (on) whose last backup failed, whose saves look damaged (save alarm), or with a damaged backup in the last check. Empty when all is well |
 | `games[].lastResult` | `{ "result": "ok" / "failed" / "refused", "when", "what" }` of that game's last backup try, or `null` |
 | `games[].steamCloud` | Steam Cloud also syncs this game |
+| `look` | `"light"` or `"dark"`: the look Vault is showing now (1.14) |
 | `secondCopy` | `reachable`, `behind`, `conflicts` (1.10) and `path`, `keep` (0 = in step), `verified` (time of the last Verify), `copies`, `mismatched` (1.13); `null` without a second copy |
 
 Built with the C# compiler that ships with Windows (.NET Framework 4.8): run `build.ps1`. No admin needed.

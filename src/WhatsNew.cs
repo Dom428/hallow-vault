@@ -13,6 +13,7 @@ namespace HallowVault
     {
         // Newest first. One or two short lines per version.
         public static readonly Tuple<string, string[]>[] Notes = {
+            Tuple.Create("1.14", new[] { "Light and dark mode: follows Hallow Toolkit's Light / Dark / Same as Windows, live", "Settings > Look: Follow Hallow, Light or Dark just for Vault" }),
             Tuple.Create("1.13", new[] { "Second copy to any folder - now also a NAS share you type in (\\\\NAS\\share). Every copy is read back and checked (SHA-256), it can keep its own number of versions, and Verify copies checks them all again", "Restore > Preview: what changed since a backup (sizes and times), and Restore file puts back just one file - your saves are backed up first", "Finds saves in more common places (My Games, Saved Games, LocalLow) and shows which games Steam Cloud already syncs" }),
             Tuple.Create("1.12", new[] { "Check backups (the heart button, or Settings): every zip must open and every file must match its checksum - green, amber or red per game. It only reads; a weekly check is in Settings (off by default)", "Add a game: back up a game no launcher knows - give it a name, its save folders and (optionally) its .exe. Edit or remove it any time; removing never deletes its backups" }),
             Tuple.Create("1.11", new[] { "Saves for 19,000+ games: Vault uses Ludusavi's save database (built from PCGamingWiki), downloaded from GitHub and checked weekly", "Settings > Online save database to turn it off; Vault's own detection still covers games it doesn't know" }),
@@ -40,12 +41,13 @@ namespace HallowVault
 
     public class WhatsNewWindow : Window
     {
-        static SolidColorBrush B(string hex) { return new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); }
+        static SolidColorBrush B(string hex) { return new SolidColorBrush((Color)ColorConverter.ConvertFromString(Look.Map(hex))); }
         public WhatsNewWindow(List<Tuple<string, string[]>> items)
         {
             Title = "What's new in Hallow Vault"; Width = 560; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize;
             Background = (Brush)FindResource("Bg"); Foreground = (Brush)FindResource("Text");
             FontFamily = new FontFamily("Segoe UI"); FontSize = 12.5; WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
+            Look.Follow(this);   // v1.14
             var sp = new StackPanel { Margin = new Thickness(26, 20, 26, 20) };
             sp.Children.Add(new TextBlock { Text = "What's new in Hallow Vault " + Program.Version, FontSize = 20, FontWeight = FontWeights.Bold, Foreground = Accent.Brush(), Margin = new Thickness(0, 0, 0, 12) });
             foreach (var v in items)

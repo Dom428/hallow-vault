@@ -23,14 +23,14 @@ using WF = System.Windows.Forms;
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
 [assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.13.0.0")]
-[assembly: AssemblyFileVersion("1.13.0.0")]
+[assembly: AssemblyVersion("1.14.0.0")]
+[assembly: AssemblyFileVersion("1.14.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.13";
+        public const string Version = "1.14";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -57,14 +57,13 @@ namespace HallowVault
             app.Run();
             GC.KeepAlive(mutex);
         }
-        static void LoadTheme(Application app) { Accent.Apply(app, Accent.Want(VaultSettings.Load().UseHallowAccent)); }   // v1.6: with the Hallow accent
+        static void LoadTheme(Application app) { var s = VaultSettings.Load(); Accent.Apply(app, Accent.Want(s.UseHallowAccent), Look.Want(s.Look)); }   // v1.6: with the Hallow accent; v1.14: light or dark
     }
 
     public class VaultWindow : Window
     {
-        [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
         static Color C(string hex) { return (Color)ColorConverter.ConvertFromString(hex); }
-        static SolidColorBrush B(string hex) { return new SolidColorBrush(C(hex)); }
+        static SolidColorBrush B(string hex) { return new SolidColorBrush(C(Look.Map(hex))); }   // v1.14: written with the dark values, swapped for the light ones in light mode
 
         readonly VaultSettings S = VaultSettings.Load();
         readonly bool startHidden; bool exiting, toldTray;
@@ -96,7 +95,7 @@ namespace HallowVault
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             try { Icon = AppIcon(); } catch { }
             Content = Build();
-            SourceInitialized += (s, e) => { int dark = 1; DwmSetWindowAttribute(new WindowInteropHelper(this).Handle, 20, ref dark, 4); };
+            Look.Follow(this);   // v1.14: the title bar matches light / dark
             Closing += (s, e) =>
             {
                 if (!exiting && S.TrayOnClose && !Snap.On)
@@ -149,14 +148,23 @@ namespace HallowVault
             S.Save();
             IsVisibleChanged += (s, e) => { if (IsVisible) { Dispatcher.BeginInvoke(new Action(ShowWhatsNew), DispatcherPriority.ApplicationIdle); Dispatcher.BeginInvoke(new Action(ShowCrash), DispatcherPriority.ApplicationIdle); } };
             Accent.Watch(Dispatcher, ApplyAccent);
+            // v1.14: "Same as Windows" follows Windows' app mode live (a registry look every 3 s, only acts on a change)
+            lastSysLight = Look.SystemLight();
+            sysWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            sysWatch.Tick += (s, e) => { var v = Look.SystemLight(); if (v != lastSysLight) { lastSysLight = v; ApplyAccent(); } };
+            sysWatch.Start();
             if (!startHidden) Show();
         }
 
         // ================================================================ v1.6: Hallow accent and crash reports
+        DispatcherTimer sysWatch; bool? lastSysLight;
+        // the accent and (v1.14) light / dark: theme.json changed, Windows' mode changed, or a setting - rebuilds the window when either changed
         void ApplyAccent()
         {
-            var want = Accent.Want(S.UseHallowAccent); if (string.Equals(want, Accent.Current, StringComparison.OrdinalIgnoreCase)) return;
-            Accent.Apply(Application.Current, want);
+            var want = Accent.Want(S.UseHallowAccent); var light = Look.Want(S.Look);
+            if (string.Equals(want, Accent.Current, StringComparison.OrdinalIgnoreCase) && light == Accent.CurrentLight) return;
+            Accent.Apply(Application.Current, want, light);
+            Background = (Brush)FindResource("Bg"); Foreground = (Brush)FindResource("Text"); Look.TitleBar(this);
             var open = settingsPanel != null && settingsPanel.Visibility == Visibility.Visible; var msg = status == null ? null : status.Text;
             Content = Build(); Fill();
             if (open) { gearBtn.IsChecked = true; settingsPanel.Visibility = Visibility.Visible; }
@@ -664,7 +672,7 @@ namespace HallowVault
             DateTime lastChk; var hasChk = DateTime.TryParse(S.LastCheck, out lastChk);
             var check = new Dictionary<string, object> { { "when", hasChk ? Link.Time(lastChk) : null }, { "running", checking }, { "fine", fine }, { "warning", warn }, { "damaged", bad }, { "weekly", S.WeeklyCheck } };
             bool isBusy; lock (busy) isBusy = working;
-            var d = new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "secondCopy", string.IsNullOrEmpty(S.CopyDir) || copyState == null ? null : CopyStatus() }, { "lastCheck", check }, { "games", gl } };
+            var d = new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version }, { "updated", Link.Time(DateTime.Now) }, { "running", !exiting }, { "busy", isBusy }, { "lastCrash", Link.Time(Crash.Last()) }, { "look", Accent.CurrentLight ? "light" : "dark" }, { "secondCopy", string.IsNullOrEmpty(S.CopyDir) || copyState == null ? null : CopyStatus() }, { "lastCheck", check }, { "games", gl } };
             // v1.13: backup health in one place (for Hallow Hub and Hallow Guard): the newest backup, whether the latest backup try worked, and which games need a look
             DateTime? newest = null; foreach (var hs in history.Values) if (hs.Count > 0 && (newest == null || hs[0].When > newest)) newest = hs[0].When;
             d["lastBackupAt"] = Link.Time(newest);
@@ -923,7 +931,7 @@ namespace HallowVault
         {
             var b = new Border { Background = B("#241E2E"), BorderBrush = B("#3A3248"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(18, 14, 18, 16), Width = 430, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 62, 22, 0), Visibility = Visibility.Collapsed, Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 24, Opacity = 0.5, ShadowDepth = 4 } };
+                Margin = new Thickness(0, 62, 22, 0), Visibility = Visibility.Collapsed, Effect = Look.Light ? new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 18, Opacity = 0.14, ShadowDepth = 3 } : new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 24, Opacity = 0.5, ShadowDepth = 4 } };   // v1.14: softer on light
             var sp = new StackPanel();
             var sh = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
             var close = new Button { Content = "x", Tag = "icon", Style = (Style)FindResource("Btn"), Width = 30, Height = 28, Padding = new Thickness(0) };
@@ -987,6 +995,8 @@ namespace HallowVault
             sw("Start with Windows (in the tray)", StartsWithWindows(), v => SetStartWithWindows(v));
             sw("Use the Hallow icon (Hallow Hub's tray menu, instead of a Vault icon)", S.UseHallowIcon, v => { S.UseHallowIcon = v; CheckTrayHost(); });
             sw("Use the Hallow accent colour (picked in Hallow Toolkit)", S.UseHallowAccent, v => { S.UseHallowAccent = v; Dispatcher.BeginInvoke(new Action(ApplyAccent)); });
+            // v1.14: light / dark - Follow Hallow (Hallow Toolkit's Light / Dark / Same as Windows) or Vault's own choice
+            pickRow("Look", new object[] { "hallow", "light", "dark" }, new[] { "Follow Hallow", "Light", "Dark" }, S.LookSetting(), v => { S.Look = (string)v; Dispatcher.BeginInvoke(new Action(ApplyAccent)); });
             // v1.11: the online save database
             sw("Online save database (where 19,000+ games keep their saves)", S.UseManifest, v => { S.UseManifest = v; if (v && !Manifest.Loaded) CheckManifest(true); else Rescan(); ShowManifestState(); });
             sp.Children.Add(new TextBlock { Text = "Ludusavi's save database, built from PCGamingWiki. Vault downloads it from GitHub and checks once a week for a newer one - nothing about your PC is sent. Vault's own detection still adds anything it misses.", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(46, -2, 0, 4) });
@@ -1427,7 +1437,7 @@ namespace HallowVault
         {
             var w = new Window { Title = title, Width = width, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, Owner = Snap.On ? null : owner, WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Background = (Brush)FindResource("Bg"), Foreground = (Brush)FindResource("Text"), FontFamily = new FontFamily("Segoe UI"), FontSize = 12.5, ShowInTaskbar = false };
-            w.SourceInitialized += (s, e) => { int dark = 1; DwmSetWindowAttribute(new WindowInteropHelper(w).Handle, 20, ref dark, 4); };
+            Look.Follow(w);
             return w;
         }
         // v1.13: the safety backup before any restore (whole version or one file) - the saves as they are now, always, even if nothing changed.
@@ -1649,6 +1659,34 @@ namespace HallowVault
                 var rw = BuildRestore(g); Snap.Save(rw, System.IO.Path.Combine(dir, "restore.png"), rw.Width, 0);
                 var hs = history[g.Id]; var cw = BuildCompare(g, hs, hs[hs.Count - 1], this); Snap.Save(cw, System.IO.Path.Combine(dir, "compare.png"), cw.Width, 0);
             }
+            var wn = new WhatsNewWindow(WhatsNew.Since("1.12")); Snap.Save(wn, System.IO.Path.Combine(dir, "whatsnew.png"), wn.Width, 0);   // v1.14
+            SnapLive(dir);
+        }
+        // v1.14, test copies only (HALLOW_SNAP_LIVE=light|dark): rewrite the TEST theme.json's mode while "running" and let the real
+        // watcher (Accent.Watch -> ApplyAccent) switch the look, then snap the main window again as main-live.png
+        void SnapLive(string dir)
+        {
+            var to = Environment.GetEnvironmentVariable("HALLOW_SNAP_LIVE");
+            if (Link.TestDir == null || string.IsNullOrEmpty(to)) return;
+            var before = Accent.CurrentLight; bool done = false;
+            Accent.Watch(Dispatcher, () => { ApplyAccent(); if (Accent.CurrentLight != before) done = true; });
+            Directory.CreateDirectory(Accent.Folder);
+            var file = System.IO.Path.Combine(Accent.Folder, "theme.json"); var old = Accent.ReadTheme() ?? "{}";
+            var t = System.Text.RegularExpressions.Regex.Replace(old, "\"mode\"\\s*:\\s*\"[^\"]*\"", "\"mode\": \"" + to + "\"");
+            if (t == old) t = old.TrimEnd().TrimEnd('}') + (old.Contains(":") ? ", " : "") + "\"mode\": \"" + to + "\" }";
+            var until = DateTime.Now.AddSeconds(1);
+            while (DateTime.Now < until) { DoEvents(); Thread.Sleep(20); }
+            File.WriteAllText(file + ".tmp", t); if (File.Exists(file)) File.Replace(file + ".tmp", file, null); else File.Move(file + ".tmp", file);
+            until = DateTime.Now.AddSeconds(15);
+            while (!done && DateTime.Now < until) { DoEvents(); Thread.Sleep(20); }
+            File.WriteAllText(System.IO.Path.Combine(dir, "live.txt"), (done ? "switched " : "NOT switched ") + (before ? "light" : "dark") + " -> " + (Accent.CurrentLight ? "light" : "dark"));
+            Snap.Save(this, System.IO.Path.Combine(dir, "main-live.png"), 1060, 740);
+        }
+        static void DoEvents()
+        {
+            var fr = new DispatcherFrame();
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => fr.Continue = false));
+            Dispatcher.PushFrame(fr);
         }
     }
 }
