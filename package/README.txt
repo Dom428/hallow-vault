@@ -6,6 +6,15 @@ HOW TO INSTALL
 3. Double-click INSTALL.bat (no admin needed)
 4. Hallow Vault opens. It's in your Start menu and on your Desktop.
 
+WHAT'S NEW IN 1.16
+- Hallow family backup (the Family backup button): every Hallow app's settings, Hallow Keys' and
+  Hallow Authenticator's encrypted backups (copied exactly as they are - never opened) and, if you
+  like, Clips favourites. Daily and after changes, to another drive, a USB drive or your NAS,
+  keeping the newest 14 versions (old ones go to the Recycle Bin).
+- Restore picks a date, then the apps to put back (each app is asked to quit first). Test restore
+  checks a version without restoring. If Windows' Ransomware protection blocks a destination,
+  Vault says so and shows how to allow it.
+
 WHAT'S NEW IN 1.15
 - Light mode readability fixes: green and amber status text, accent buttons (white text on a darker
   fill for light accents like violet) and accent text are easier to read. Windows that are open

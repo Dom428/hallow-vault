@@ -22,15 +22,15 @@ using WF = System.Windows.Forms;
 
 [assembly: AssemblyTitle("Hallow Vault")]
 [assembly: AssemblyProduct("Hallow Vault")]
-[assembly: AssemblyDescription("Backs up your game saves and settings, and puts any version back")]
-[assembly: AssemblyVersion("1.15.0.0")]
-[assembly: AssemblyFileVersion("1.15.0.0")]
+[assembly: AssemblyDescription("Backs up your game saves and the whole Hallow family, and puts any version back")]
+[assembly: AssemblyVersion("1.16.0.0")]
+[assembly: AssemblyFileVersion("1.16.0.0")]
 
 namespace HallowVault
 {
     public static class Program
     {
-        public const string Version = "1.15";
+        public const string Version = "1.16";
         [STAThread]
         public static void Main(string[] args)
         {
@@ -60,7 +60,7 @@ namespace HallowVault
         static void LoadTheme(Application app) { var s = VaultSettings.Load(); Accent.Apply(app, Accent.Want(s.UseHallowAccent), Look.Want(s.Look)); }   // v1.6: with the Hallow accent; v1.14: light or dark
     }
 
-    public class VaultWindow : Window
+    public partial class VaultWindow : Window
     {
         static Color C(string hex) { return (Color)ColorConverter.ConvertFromString(hex); }
         static SolidColorBrush B(string hex) { return Look.B(hex); }   // v1.14: written with the dark values, swapped for the light ones in light mode (v1.15: tagged, so open windows recolour)
@@ -91,6 +91,7 @@ namespace HallowVault
             // v1.11: the online save database (loaded from its cached index - fast)
             Saves.ManifestFor = g => S.UseManifest ? Manifest.For(g) : null; Saves.ManifestConfig = S.ManifestConfig;
             if (S.UseManifest) { var lsw = Stopwatch.StartNew(); if (Manifest.Load()) manifestLoadMs = lsw.ElapsedMilliseconds; }
+            if (Link.TestDir != null) Family.Home = System.IO.Path.Combine(Link.TestDir, "profile");   // v1.16: test copies back up a fake family, never the real one
             Title = "Hallow Vault"; Width = 1060; Height = 740; MinWidth = 880; MinHeight = 560;
             Background = (Brush)FindResource("Bg"); Foreground = (Brush)FindResource("Text"); FontFamily = new FontFamily("Segoe UI"); FontSize = 12.5;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -143,6 +144,7 @@ namespace HallowVault
             Dispatcher.BeginInvoke(new Action(CheckSteamUpdates), DispatcherPriority.ApplicationIdle);
             DateTime lastCheck; if (!DateTime.TryParse(S.LastUpdateCheck, out lastCheck) || (DateTime.Now - lastCheck).TotalHours > 20) Dispatcher.BeginInvoke(new Action(() => CheckForUpdate(false)), DispatcherPriority.ApplicationIdle);
             hourly.Tick += (s, e) => { DateTime lc; if (!DateTime.TryParse(S.LastUpdateCheck, out lc) || (DateTime.Now - lc).TotalHours > 20) CheckForUpdate(false); };
+            FamilyStart();   // v1.16: the Hallow family backup (daily, and after changes)
             Link.Serve(LinkCommand);
             // What's new after an update (1.0 didn't remember the version, so someone with backups already is coming from 1.0)
             if (string.IsNullOrEmpty(S.LastSeenVersion)) S.LastSeenVersion = S.LastSig.Count > 0 ? "1.0" : Program.Version;
@@ -606,14 +608,15 @@ namespace HallowVault
             var sp = line.IndexOf(' ');
             var cmd = (sp < 0 ? line : line.Substring(0, sp)).ToLowerInvariant(); var arg = sp < 0 ? "" : line.Substring(sp + 1).Trim();
             if (cmd == "ping") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "version", Program.Version } });
-            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit" && cmd != "pin" && cmd != "unpin" && cmd != "check" && cmd != "verify") return "error unknown command";
+            if (cmd != "status" && cmd != "backup" && cmd != "restore" && cmd != "open" && cmd != "menu" && cmd != "invoke" && cmd != "quit" && cmd != "pin" && cmd != "unpin" && cmd != "check" && cmd != "verify" && cmd != "backup-now") return "error unknown command";
             var r = Dispatcher.Invoke(new Func<string>(() => LinkOnUi(cmd, arg)), TimeSpan.FromSeconds(5));
             return r as string ?? "error Hallow Vault is busy, try again";
         }
         string LinkOnUi(string cmd, string arg)
         {
             if (cmd == "status") return "ok " + Link.Json(StatusData());
-            if (cmd == "open") { ShowFromTray(); return "ok"; }
+            if (cmd == "open") { ShowFromTray(); if (arg.Equals("family", StringComparison.OrdinalIgnoreCase)) ShowFamily(); return "ok"; }
+            if (cmd == "backup-now") return FamilyBackupNow();   // v1.16: the Hallow family backup, now (in the background; the result is in status "family")
             if (cmd == "quit") { var qt = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) }; qt.Tick += (s, e) => { qt.Stop(); Quit(); }; qt.Start(); return "ok"; }   // after the reply is sent
             if (cmd == "menu") return "ok " + Link.Json(new Dictionary<string, object> { { "app", "Vault" }, { "items", MenuItems() } });
             if (cmd == "invoke") return InvokeItem(arg);
@@ -692,6 +695,7 @@ namespace HallowVault
                 if (why.Count > 0) failing.Add(new Dictionary<string, object> { { "name", g.Name }, { "why", string.Join(", ", why) } });
             }
             d["failingGames"] = failing;
+            d["family"] = FamilyStatus();   // v1.16
             return d;
         }
         Dictionary<string, object> CopyStatus()   // v1.10 fields, plus v1.13's path, retention and the last Verify
@@ -821,6 +825,8 @@ namespace HallowVault
                 it("backup-all", isBusy ? "Backing up..." : "Back up everything now", !isBusy), it("restore", "Restore...", true), it("vault", "Open the vault folder", true),
                 new Dictionary<string, object> { { "id", "-" } },
                 new Dictionary<string, object> { { "id", "onclose" }, { "label", "Back up when a game closes" }, { "checked", S.OnClose } },
+                new Dictionary<string, object> { { "id", "-" } },
+                it("family-now", famBusy ? "Backing up the Hallow family..." : "Back up the Hallow family now", F.On && F.Dests.Count > 0 && !famBusy), it("family", "Hallow family backup...", true),   // v1.16
             };
         }
         string InvokeItem(string id)
@@ -831,6 +837,8 @@ namespace HallowVault
                 case "restore": ShowFromTray(); Status("Pick Restore next to a game to put an older version back."); return "ok";
                 case "vault": Directory.CreateDirectory(Root); Process.Start("explorer.exe", "\"" + Root + "\""); return "ok";
                 case "onclose": S.OnClose = !S.OnClose; S.Save(); Fill(); return "ok";
+                case "family-now": return FamilyBackupNow();
+                case "family": ShowFromTray(); ShowFamily(); return "ok";
                 default: return "error no menu item called " + id;
             }
         }
@@ -897,6 +905,9 @@ namespace HallowVault
             var addGame = new Button { Content = "Add a game", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Back up a game no launcher knows: give it a name and its save folders" };   // v1.12
             addGame.Click += (s, e) => BuildCustom(null, this).ShowDialog();
             right.Children.Add(addGame);
+            var famBtn = new Button { Content = "Family backup", Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Back up every Hallow app's settings and Hallow Keys' / Authenticator's encrypted backups to another drive, a USB drive or your NAS" };   // v1.16
+            famBtn.Click += (s, e) => ShowFamily();
+            right.Children.Add(famBtn);
             right.Children.Add(allBtn);
             checkBtn = new Button { Content = "Check backups", Tag = "icon", Width = 36, Height = 34, Padding = new Thickness(0), Style = (Style)FindResource("Btn"), Margin = new Thickness(0, 0, 8, 0), ToolTip = "Check every backup: each zip opens and every file in it matches (nothing is changed)" };   // v1.12
             checkBtn.Click += (s, e) => RunCheck(null);
@@ -982,6 +993,14 @@ namespace HallowVault
                 c.Click += (s, e) => { set(c.IsChecked == true); S.Save(); }; sp.Children.Add(c); return c;
             };
             BuildOffPc(sp);
+            // v1.16: the Hallow family backup
+            var famRow = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+            var famOpen = new Button { Content = "Family backup...", Style = (Style)FindResource("Btn"), Margin = new Thickness(8, 0, 0, 0) };
+            famOpen.Click += (s, e) => ShowFamily();
+            DockPanel.SetDock(famOpen, Dock.Right); famRow.Children.Add(famOpen);
+            famRow.Children.Add(new TextBlock { Text = "Hallow family backup", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(famRow);
+            sp.Children.Add(new TextBlock { Text = F.Dests.Count == 0 ? "Not set up: every Hallow app's settings and Hallow Keys' / Authenticator's encrypted backups, to another drive, a USB drive or your NAS." : (F.On ? "On" : "Off") + " - " + F.Dests.Count + (F.Dests.Count == 1 ? " destination" : " destinations") + ", last new version " + FamilyAgo() + ".", Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
             sw("Back up a game's saves when it closes", S.OnClose, v => S.OnClose = v);
             sw("Back up a game right before Steam updates it", S.BeforeUpdate, v => S.BeforeUpdate = v);
             sw("Back up everything once a day", S.Daily, v => S.Daily = v);
@@ -1233,7 +1252,7 @@ namespace HallowVault
             var all = history.Values.SelectMany(x => x).ToList();
             var last = all.Count == 0 ? (DateTime?)null : all.Max(x => x.When);
             summary.Text = "Backing up " + Backable().Count() + " games to " + Root + "   ·   " + all.Count + " backups, " + VaultSettings.Size(all.Sum(x => x.Bytes)) + "   ·   last one " + VaultSettings.Ago(last) +
-                (S.OnClose ? "   ·   automatic when a game closes" : "") + (S.Daily ? " and daily" : "") + CopySummary();
+                (S.OnClose ? "   ·   automatic when a game closes" : "") + (S.Daily ? " and daily" : "") + CopySummary() + FamilySummary();
             WriteStatus();
         }
         FrameworkElement Label(string t)
@@ -1627,6 +1646,7 @@ namespace HallowVault
             var menu = new WF.ContextMenuStrip();
             var open = new WF.ToolStripMenuItem("Open Hallow Vault"); open.Font = new System.Drawing.Font(open.Font, System.Drawing.FontStyle.Bold); open.Click += (s, e) => ShowFromTray(); menu.Items.Add(open);
             var all = new WF.ToolStripMenuItem("Back up everything now"); all.Click += (s, e) => Dispatcher.BeginInvoke(new Action(() => { foreach (var g in Backable()) Enqueue(g, "you asked"); })); menu.Items.Add(all);
+            var fam = new WF.ToolStripMenuItem("Back up the Hallow family now"); fam.Click += (s, e) => Dispatcher.BeginInvoke(new Action(() => { var r = FamilyBackupNow(); if (r != "ok") { ShowFromTray(); ShowFamily(); } })); menu.Items.Add(fam);   // v1.16
             menu.Items.Add(new WF.ToolStripSeparator());
             var quit = new WF.ToolStripMenuItem("Quit"); quit.Click += (s, e) => Quit(); menu.Items.Add(quit);
             tray.ContextMenuStrip = menu;
@@ -1664,6 +1684,7 @@ namespace HallowVault
                 var hs = history[g.Id]; var cw = BuildCompare(g, hs, hs[hs.Count - 1], this); Snap.Save(cw, System.IO.Path.Combine(dir, "compare.png"), cw.Width, 0);
             }
             var wn = new WhatsNewWindow(WhatsNew.Since("1.12")); Snap.Save(wn, System.IO.Path.Combine(dir, "whatsnew.png"), wn.Width, 0);   // v1.14
+            SnapFamily(dir);   // v1.16
             SnapLive(dir);
         }
         // v1.14, test copies only (HALLOW_SNAP_LIVE=light|dark): rewrite the TEST theme.json's mode while "running" and let the real
